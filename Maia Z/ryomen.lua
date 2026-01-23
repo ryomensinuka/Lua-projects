@@ -18,7 +18,7 @@ local Lighting         = game:GetService("Lighting")
 local Workspace        = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
-local Camera      = workspace.CurrentCamera
+local Camera      = Workspace.CurrentCamera
 
 --======== STATE ========
 local Aiming        = false
@@ -221,7 +221,7 @@ end
 local tracers = {}
 
 local function GetOrCreateTracer(plr)
-    if tracers[plr] and tracers[plr].__OBJECT and tracers[plr].__OBJECT.Visible ~= nil then
+    if tracers[plr] and tracers[plr].__OBJECT then
         return tracers[plr].__OBJECT
     end
 
@@ -240,7 +240,9 @@ end
 local function DestroyTracer(plr)
     local t = tracers[plr]
     if t and t.__OBJECT then
-        t.__OBJECT:Remove()
+        pcall(function()
+            t.__OBJECT:Remove()
+        end)
     end
     tracers[plr] = nil
 end
@@ -712,9 +714,6 @@ local function FormatTime(seconds)
     local s = math.floor(seconds % 60)
     return string.format("%02d:%02d:%02d", h, m, s)
 end
-
-local HelpGui
-local MainFrame
 
 local function SwitchTab(tabName)
     currentTab = tabName
@@ -1188,6 +1187,10 @@ local function ToggleMenu()
     MenuOpen        = not MenuOpen
     HelpGui.Enabled = MenuOpen
 end
+
+-- Inicializações importantes para evitar nil arithmetic
+local lastTargetCheck = 0
+local lastESPUpdate = 0
 
 RunService.Heartbeat:Connect(function()
     if PanicMode then return end
