@@ -44,8 +44,8 @@ local SMOOTH_AMOUNT = 0.25
 -- PERFORMANCE CONFIG
 local PERFORMANCE = {
     enabled         = false,
-    espUpdateSlow   = 0.25, -- esp update interval em modo 0 lag
-    espUpdateNormal = 0.10, -- esp update normal
+    espUpdateSlow   = 0.25,
+    espUpdateNormal = 0.10,
 }
 
 -- palette
@@ -73,11 +73,13 @@ local function KeyCodeToString(code)
 end
 
 local function Notify(text, dur)
-    StarterGui:SetCore("SendNotification", {
-        Title    = "Maia Z",
-        Text     = text,
-        Duration = dur or 2
-    })
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title    = "Maia Z",
+            Text     = text,
+            Duration = dur or 2
+        })
+    end)
 end
 
 --======== FOV (DRAWING) ========
@@ -134,6 +136,28 @@ local function UpdateFOV()
     end
 end
 
+--======== TARGET PART (HEAD/UPPERTORSO/HRP) ========
+local function GetAimPart(character)
+    if not character then return nil end
+
+    local head = character:FindFirstChild("Head")
+    if head and head:IsA("BasePart") then
+        return head
+    end
+
+    local upper = character:FindFirstChild("UpperTorso")
+    if upper and upper:IsA("BasePart") then
+        return upper
+    end
+
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if hrp and hrp:IsA("BasePart") then
+        return hrp
+    end
+
+    return nil
+end
+
 --======== AIM / ESP CORE ========
 local function IsTeammate(plr)
     if LocalPlayer.Team and plr.Team then
@@ -143,15 +167,18 @@ local function IsTeammate(plr)
 end
 
 local function IsValidTarget(plr)
-    if not plr or plr == LocalPlayer or not plr.Character then return false end
-    local hum  = plr.Character:FindFirstChildOfClass("Humanoid")
-    local head = plr.Character:FindFirstChild("Head")
-    if not hum or not head then return false end
+    if not plr or plr == LocalPlayer then return false end
+    local char = plr.Character
+    if not char then return false end
+
+    local hum  = char:FindFirstChildOfClass("Humanoid")
+    local part = GetAimPart(char)
+    if not hum or not part then return false end
     if hum.Health <= 0 then return false end
     if hum.Health == math.huge or hum.MaxHealth == math.huge or hum.Health > 1e6 or hum.MaxHealth > 1e6 then
         return false
     end
-    if plr.Character:FindFirstChildOfClass("ForceField") then
+    if char:FindFirstChildOfClass("ForceField") then
         return false
     end
     return true
@@ -172,15 +199,18 @@ local function GetTargetFromFOV()
 
     for _, plr in ipairs(Players:GetPlayers()) do
         if IsValidTarget(plr) and not IsTeammate(plr) then
-            local head   = plr.Character.Head
-            local dist3D = (head.Position - camPos).Magnitude
-            if dist3D <= MAX_DISTANCE then
-                local screenPos, onScreen = WorldToViewport(head.Position)
-                if onScreen then
-                    local screenDist = (screenPos - mousePos).Magnitude
-                    if screenDist <= FOV_RADIUS and screenDist < closestScreenDist then
-                        closestScreenDist = screenDist
-                        closest           = plr
+            local char = plr.Character
+            local part = GetAimPart(char)
+            if part then
+                local dist3D = (part.Position - camPos).Magnitude
+                if dist3D <= MAX_DISTANCE then
+                    local screenPos, onScreen = WorldToViewport(part.Position)
+                    if onScreen then
+                        local screenDist = (screenPos - mousePos).Magnitude
+                        if screenDist <= FOV_RADIUS and screenDist < closestScreenDist then
+                            closestScreenDist = screenDist
+                            closest           = plr
+                        end
                     end
                 end
             end
@@ -190,29 +220,26 @@ local function GetTargetFromFOV()
     return closest
 end
 
--- AimLock atualizado: tenta manter alvo, se perder pega outro dentro do FOV
 local function AimLock()
     if PanicMode or not Aiming then
         return
     end
 
     if currentTarget and IsValidTarget(currentTarget) then
-        local head = currentTarget.Character:FindFirstChild("Head")
-        if not head then
+        local char = currentTarget.Character
+        local part = GetAimPart(char)
+        if not part then
             currentTarget = nil
             return
         end
 
-        local headPos      = head.Position
-        local targetCFrame = CFrame.new(Camera.CFrame.Position, headPos)
+        local targetPos    = part.Position
+        local targetCFrame = CFrame.new(Camera.CFrame.Position, targetPos)
         Camera.CFrame      = Camera.CFrame:Lerp(targetCFrame, SMOOTH_AMOUNT)
         return
     end
 
     currentTarget = GetTargetFromFOV()
-    if not currentTarget then
-        return
-    end
 end
 
 local function GetOrCreateHighlight(char)
@@ -235,10 +262,10 @@ local function GetOrCreateTracer(plr)
         return tracers[plr].__OBJECT
     end
 
-    local line     = Drawing.new("Line")
-    line.Visible   = false
-    line.Thickness = 1.5
-    line.Transparency = 0.8
+    local line         = Drawing.new("Line")
+    line.Visible       = false
+    line.Thickness     = 1.5
+    line.Transparency  = 0.8
 
     tracers[plr] = { __OBJECT = line }
     return line
@@ -256,14 +283,15 @@ end
 
 local function ClearAllESP()
     for _, plr in ipairs(Players:GetPlayers()) do
-        if plr.Character then
-            local char = plr.Character
-            local hl   = char:FindFirstChild("maiaz_ESP")
+        local char = plr.Character
+        if char then
+            local hl = char:FindFirstChild("maiaz_ESP")
             if hl then hl:Destroy() end
-            local head = char:FindFirstChild("Head")
-            if head then
-                local bb = head:FindFirstChild("maiaz_Info")
-                if bb then bb:Destroy() end
+
+            for _, v in ipairs(char:GetChildren()) do
+                if v:IsA("BillboardGui") and v.Name == "maiaz_Info" then
+                    v:Destroy()
+                end
             end
         end
         DestroyTracer(plr)
@@ -283,8 +311,11 @@ local function UpdateESPForPlayer(plr)
     end
 
     local hl        = char:FindFirstChild("maiaz_ESP")
-    local head      = char:FindFirstChild("Head")
-    local billboard = head and head:FindFirstChild("maiaz_Info")
+    local head      = GetAimPart(char)
+    local billboard = nil
+    if head then
+        billboard = head:FindFirstChild("maiaz_Info")
+    end
 
     if not ESPEnabled or not IsValidTarget(plr) or IsTeammate(plr) then
         if hl then hl:Destroy() end
@@ -293,6 +324,7 @@ local function UpdateESPForPlayer(plr)
         return
     end
 
+    -- highlight
     if ESP_OPTIONS.highlight then
         hl = GetOrCreateHighlight(char)
         if plr == currentTarget then
@@ -307,49 +339,50 @@ local function UpdateESPForPlayer(plr)
         if hl then hl:Destroy() end
     end
 
+    -- infos
     if head and ESP_OPTIONS.info then
         billboard = head:FindFirstChild("maiaz_Info")
         if not billboard then
-            billboard              = Instance.new("BillboardGui")
-            billboard.Name         = "maiaz_Info"
-            billboard.Size         = UDim2.new(0, 110, 0, 40)
-            billboard.StudsOffset  = Vector3.new(0, 2, 0)
-            billboard.AlwaysOnTop  = true
-            billboard.Parent       = head
+            billboard                 = Instance.new("BillboardGui")
+            billboard.Name            = "maiaz_Info"
+            billboard.Size            = UDim2.new(0, 110, 0, 40)
+            billboard.StudsOffset     = Vector3.new(0, 2, 0)
+            billboard.AlwaysOnTop     = true
+            billboard.Parent          = head
 
-            local text             = Instance.new("TextLabel")
-            text.Name              = "Label"
-            text.Size              = UDim2.new(1, 0, 0.5, 0)
+            local text                = Instance.new("TextLabel")
+            text.Name                 = "Label"
+            text.Size                 = UDim2.new(1, 0, 0.5, 0)
             text.BackgroundTransparency = 1
-            text.Font              = Enum.Font.GothamMedium
-            text.TextSize          = 13
+            text.Font                 = Enum.Font.GothamMedium
+            text.TextSize             = 13
             text.TextStrokeTransparency = 0.5
-            text.TextColor3        = COLORS.cream
-            text.TextXAlignment    = Enum.TextXAlignment.Center
-            text.Parent            = billboard
+            text.TextColor3           = COLORS.cream
+            text.TextXAlignment       = Enum.TextXAlignment.Center
+            text.Parent               = billboard
 
-            local barBg            = Instance.new("Frame")
-            barBg.Name             = "HPBG"
-            barBg.Size             = UDim2.new(1, -14, 0, 6)
-            barBg.Position         = UDim2.new(0, 7, 1, -8)
-            barBg.BackgroundColor3 = COLORS.deepNavy
-            barBg.BorderSizePixel  = 0
-            barBg.Parent           = billboard
+            local barBg               = Instance.new("Frame")
+            barBg.Name                = "HPBG"
+            barBg.Size                = UDim2.new(1, -14, 0, 6)
+            barBg.Position            = UDim2.new(0, 7, 1, -8)
+            barBg.BackgroundColor3    = COLORS.deepNavy
+            barBg.BorderSizePixel     = 0
+            barBg.Parent              = billboard
 
-            local barBgCorner      = Instance.new("UICorner")
-            barBgCorner.CornerRadius = UDim.new(0, 3)
-            barBgCorner.Parent     = barBg
+            local barBgCorner         = Instance.new("UICorner")
+            barBgCorner.CornerRadius  = UDim.new(0, 3)
+            barBgCorner.Parent        = barBg
 
-            local bar              = Instance.new("Frame")
-            bar.Name               = "HP"
-            bar.Size               = UDim2.new(1, 0, 1, 0)
-            bar.BackgroundColor3   = COLORS.gold
-            bar.BorderSizePixel    = 0
-            bar.Parent             = barBg
+            local bar                 = Instance.new("Frame")
+            bar.Name                  = "HP"
+            bar.Size                  = UDim2.new(1, 0, 1, 0)
+            bar.BackgroundColor3      = COLORS.gold
+            bar.BorderSizePixel       = 0
+            bar.Parent                = barBg
 
-            local barCorner        = Instance.new("UICorner")
-            barCorner.CornerRadius = UDim.new(0, 3)
-            barCorner.Parent       = bar
+            local barCorner           = Instance.new("UICorner")
+            barCorner.CornerRadius    = UDim.New(0, 3)
+            barCorner.Parent          = bar
         end
 
         local hum   = char:FindFirstChildOfClass("Humanoid")
@@ -382,6 +415,7 @@ local function UpdateESPForPlayer(plr)
         if billboard then billboard:Destroy() end
     end
 
+    -- tracers
     local tracerObj = tracers[plr] and tracers[plr].__OBJECT or nil
     if ESP_OPTIONS.tracers and head then
         local line                = tracerObj or GetOrCreateTracer(plr)
@@ -410,8 +444,8 @@ local function UpdateAllESP()
         return
     end
 
-    local processed          = 0
-    local maxPlayersPerTick  = PERFORMANCE.enabled and 12 or math.huge
+    local processed         = 0
+    local maxPlayersPerTick = PERFORMANCE.enabled and 12 or math.huge
 
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer then
@@ -496,7 +530,7 @@ local function TogglePanic()
             HelpGui.Enabled = false
         end
 
-        Notify("Botão do Pânico • Maia Z OFF temporário", 2)
+        Notify("Botão do Pânico - Maia Z OFF temporário", 2)
     else
         Aiming     = false
         ESPEnabled = PanicStored.ESPEnabled
@@ -514,7 +548,7 @@ local function TogglePanic()
         end
 
         ForceRefreshESP()
-        Notify("Botão do Pânico • Maia Z restaurado", 2)
+        Notify("Botão do Pânico - Maia Z restaurado", 2)
     end
 end
 
@@ -696,7 +730,7 @@ local function CreateToggle(parent, yPos, labelText, key)
     icon.Parent                     = btn
 
     local iconCorner                = Instance.new("UICorner")
-    iconCorner.CornerRadius         = UDim.new(0, 5)
+    iconCorner.CornerRadius         = UDim.New(0, 5)
     iconCorner.Parent               = icon
 
     local indicator                 = Instance.new("Frame")
@@ -707,7 +741,7 @@ local function CreateToggle(parent, yPos, labelText, key)
     indicator.Parent                = icon
 
     local indCorner                 = Instance.new("UICorner")
-    indCorner.CornerRadius          = UDim.new(1, 0)
+    indCorner.CornerRadius          = UDim.New(1, 0)
     indCorner.Parent                = indicator
 
     btn.MouseButton1Click:Connect(function()
@@ -777,11 +811,11 @@ local function SwitchTab(tabName)
         status.TextColor3               = COLORS.accent
         status.TextXAlignment           = Enum.TextXAlignment.Center
         status.TextYAlignment           = Enum.TextYAlignment.Center
-        status.Text                     = "Idle • Nenhum alvo"
+        status.Text                     = "Idle - Nenhum alvo"
         status.Parent                   = ContentFrame
 
         local statusCorner              = Instance.new("UICorner")
-        statusCorner.CornerRadius       = UDim.new(0, 6)
+        statusCorner.CornerRadius       = UDim.New(0, 6)
         statusCorner.Parent             = status
 
     elseif tabName == "visual" then
@@ -815,7 +849,7 @@ local function SwitchTab(tabName)
         espBtn.Parent                    = ContentFrame
 
         local espCorner                  = Instance.new("UICorner")
-        espCorner.CornerRadius           = UDim.new(0, 8)
+        espCorner.CornerRadius           = UDim.New(0, 8)
         espCorner.Parent                 = espBtn
 
         espBtn.MouseButton1Click:Connect(function()
@@ -831,7 +865,7 @@ local function SwitchTab(tabName)
     elseif tabName == "performance" then
         local title                      = Instance.new("TextLabel")
         title.Size                       = UDim2.new(1, -40, 0, 24)
-        title.Position                   = UDim2.new(0, 20, 0, 10)
+        title.Position                   = UDim2.New(0, 20, 0, 10)
         title.BackgroundTransparency     = 1
         title.Font                       = Enum.Font.GothamBold
         title.TextSize                   = 18
@@ -841,8 +875,8 @@ local function SwitchTab(tabName)
         title.Parent                     = ContentFrame
 
         local desc                       = Instance.new("TextLabel")
-        desc.Size                        = UDim2.new(1, -40, 0, 36)
-        desc.Position                    = UDim2.new(0, 20, 0, 40)
+        desc.Size                        = UDim2.New(1, -40, 0, 36)
+        desc.Position                    = UDim2.New(0, 20, 0, 40)
         desc.BackgroundTransparency      = 1
         desc.Font                        = Enum.Font.Gotham
         desc.TextSize                    = 13
@@ -855,8 +889,8 @@ local function SwitchTab(tabName)
 
         local perfBtn                    = Instance.new("TextButton")
         perfBtn.Name                     = "PerfButton"
-        perfBtn.Size                     = UDim2.new(1, -40, 0, 44)
-        perfBtn.Position                 = UDim2.new(0, 20, 0, 90)
+        perfBtn.Size                     = UDim2.New(1, -40, 0, 44)
+        perfBtn.Position                 = UDim2.New(0, 20, 0, 90)
         perfBtn.BackgroundColor3         = PERFORMANCE.enabled and COLORS.success or COLORS.danger
         perfBtn.BackgroundTransparency   = 0
         perfBtn.BorderSizePixel          = 0
@@ -867,7 +901,7 @@ local function SwitchTab(tabName)
         perfBtn.Parent                   = ContentFrame
 
         local perfCorner                 = Instance.new("UICorner")
-        perfCorner.CornerRadius          = UDim.new(0, 8)
+        perfCorner.CornerRadius          = UDim.New(0, 8)
         perfCorner.Parent                = perfBtn
 
         perfBtn.MouseButton1Click:Connect(function()
@@ -879,8 +913,8 @@ local function SwitchTab(tabName)
 
     elseif tabName == "config" then
         local title                      = Instance.new("TextLabel")
-        title.Size                       = UDim2.new(1, -40, 0, 24)
-        title.Position                   = UDim2.new(0, 20, 0, 10)
+        title.Size                       = UDim2.New(1, -40, 0, 24)
+        title.Position                   = UDim2.New(0, 20, 0, 10)
         title.BackgroundTransparency     = 1
         title.Font                       = Enum.Font.GothamBold
         title.TextSize                   = 18
@@ -891,14 +925,14 @@ local function SwitchTab(tabName)
 
         local function CreateKeybindRow(y, labelText, getKey, setTarget)
             local row                    = Instance.new("Frame")
-            row.Size                     = UDim2.new(1, -40, 0, 30)
-            row.Position                 = UDim2.new(0, 20, 0, y)
+            row.Size                     = UDim2.New(1, -40, 0, 30)
+            row.Position                 = UDim2.New(0, 20, 0, y)
             row.BackgroundTransparency   = 1
             row.Parent                   = ContentFrame
 
             local lbl                    = Instance.new("TextLabel")
-            lbl.Size                     = UDim2.new(0.6, 0, 1, 0)
-            lbl.Position                 = UDim2.new(0, 0, 0, 0)
+            lbl.Size                     = UDim2.New(0.6, 0, 1, 0)
+            lbl.Position                 = UDim2.New(0, 0, 0, 0)
             lbl.BackgroundTransparency   = 1
             lbl.Font                     = Enum.Font.Gotham
             lbl.TextSize                 = 14
@@ -908,8 +942,8 @@ local function SwitchTab(tabName)
             lbl.Parent                   = row
 
             local btn                    = Instance.new("TextButton")
-            btn.Size                     = UDim2.new(0.4, -10, 1, 0)
-            btn.Position                 = UDim2.new(0.6, 10, 0, 0)
+            btn.Size                     = UDim2.New(0.4, -10, 1, 0)
+            btn.Position                 = UDim2.New(0.6, 10, 0, 0)
             btn.BackgroundColor3         = COLORS.deepNavy
             btn.BackgroundTransparency   = 0.15
             btn.BorderSizePixel          = 0
@@ -921,7 +955,7 @@ local function SwitchTab(tabName)
             btn.Parent                   = row
 
             local corner                 = Instance.new("UICorner")
-            corner.CornerRadius          = UDim.new(0, 6)
+            corner.CornerRadius          = UDim.New(0, 6)
             corner.Parent                = btn
 
             btn.MouseButton1Click:Connect(function()
@@ -936,8 +970,8 @@ local function SwitchTab(tabName)
         CreateKeybindRow(170, "Botão do Pânico",  function() return PanicKey end, "panic")
 
         local info                       = Instance.new("TextLabel")
-        info.Size                        = UDim2.new(1, -40, 0, 60)
-        info.Position                    = UDim2.new(0, 20, 0, 210)
+        info.Size                        = UDim2.New(1, -40, 0, 60)
+        info.Position                    = UDim2.New(0, 20, 0, 210)
         info.BackgroundTransparency      = 1
         info.Font                        = Enum.Font.Gotham
         info.TextSize                    = 12
@@ -949,8 +983,8 @@ local function SwitchTab(tabName)
         info.Parent                      = ContentFrame
 
         local panicBtn                   = Instance.new("TextButton")
-        panicBtn.Size                    = UDim2.new(1, -40, 0, 40)
-        panicBtn.Position                = UDim2.new(0, 20, 0, 280)
+        panicBtn.Size                    = UDim2.New(1, -40, 0, 40)
+        panicBtn.Position                = UDim2.New(0, 20, 0, 280)
         panicBtn.BackgroundColor3        = PanicMode and COLORS.danger or COLORS.deepNavy
         panicBtn.BackgroundTransparency  = 0
         panicBtn.BorderSizePixel         = 0
@@ -961,7 +995,7 @@ local function SwitchTab(tabName)
         panicBtn.Parent                  = ContentFrame
 
         local panicCorner                = Instance.new("UICorner")
-        panicCorner.CornerRadius         = UDim.new(0, 8)
+        panicCorner.CornerRadius         = UDim.New(0, 8)
         panicCorner.Parent               = panicBtn
 
         panicBtn.MouseButton1Click:Connect(function()
@@ -972,8 +1006,8 @@ local function SwitchTab(tabName)
 
     elseif tabName == "info" then
         local title                      = Instance.new("TextLabel")
-        title.Size                       = UDim2.new(1, -40, 0, 24)
-        title.Position                   = UDim2.new(0, 20, 0, 10)
+        title.Size                       = UDim2.New(1, -40, 0, 24)
+        title.Position                   = UDim2.New(0, 20, 0, 10)
         title.BackgroundTransparency     = 1
         title.Font                       = Enum.Font.GothamBold
         title.TextSize                   = 18
@@ -984,8 +1018,8 @@ local function SwitchTab(tabName)
 
         local info                       = Instance.new("TextLabel")
         info.Name                        = "ServerInfo"
-        info.Size                        = UDim2.new(1, -40, 0, 80)
-        info.Position                    = UDim2.new(0, 20, 0, 50)
+        info.Size                        = UDim2.New(1, -40, 0, 80)
+        info.Position                    = UDim2.New(0, 20, 0, 50)
         info.BackgroundColor3            = COLORS.deepNavy
         info.BackgroundTransparency      = 0.2
         info.BorderSizePixel             = 0
@@ -998,7 +1032,7 @@ local function SwitchTab(tabName)
         info.Parent                      = ContentFrame
 
         local infoCorner                 = Instance.new("UICorner")
-        infoCorner.CornerRadius          = UDim.new(0, 8)
+        infoCorner.CornerRadius          = UDim.New(0, 8)
         infoCorner.Parent                = info
     end
 end
@@ -1012,15 +1046,15 @@ local function CreateMenu()
 
     MainFrame             = Instance.new("Frame")
     MainFrame.Name        = "MainFrame"
-    MainFrame.Size        = UDim2.new(0, 520, 0, 360)
-    MainFrame.Position    = UDim2.new(0.5, -260, 0.5, -180)
+    MainFrame.Size        = UDim2.New(0, 520, 0, 360)
+    MainFrame.Position    = UDim2.New(0.5, -260, 0.5, -180)
     MainFrame.BackgroundColor3       = COLORS.navy
     MainFrame.BackgroundTransparency = 0.1
     MainFrame.BorderSizePixel        = 0
     MainFrame.Parent                 = HelpGui
 
     local mainCorner      = Instance.new("UICorner")
-    mainCorner.CornerRadius = UDim.new(0, 6)
+    mainCorner.CornerRadius = UDim.New(0, 6)
     mainCorner.Parent     = MainFrame
 
     local mainStroke      = Instance.new("UIStroke")
@@ -1031,22 +1065,22 @@ local function CreateMenu()
 
     local header          = Instance.new("Frame")
     header.Name           = "Header"
-    header.Size           = UDim2.new(1, 0, 0, 46)
+    header.Size           = UDim2.New(1, 0, 0, 46)
     header.BackgroundColor3 = COLORS.deepNavy
     header.BackgroundTransparency = 0
     header.BorderSizePixel = 0
     header.Parent         = MainFrame
 
     local headerLine      = Instance.new("Frame")
-    headerLine.Size       = UDim2.new(1, 0, 0, 1)
-    headerLine.Position   = UDim2.new(0, 0, 1, -1)
+    headerLine.Size       = UDim2.New(1, 0, 0, 1)
+    headerLine.Position   = UDim2.New(0, 0, 1, -1)
     headerLine.BackgroundColor3 = COLORS.gold
     headerLine.BorderSizePixel  = 0
     headerLine.Parent     = header
 
     local title           = Instance.new("TextLabel")
-    title.Size            = UDim2.new(0, 200, 1, 0)
-    title.Position        = UDim2.new(0, 18, 0, 0)
+    title.Size            = UDim2.New(0, 200, 1, 0)
+    title.Position        = UDim2.New(0, 18, 0, 0)
     title.BackgroundTransparency = 1
     title.Font            = Enum.Font.GothamBold
     title.TextSize        = 18
@@ -1056,8 +1090,8 @@ local function CreateMenu()
     title.Parent          = header
 
     local subtitle        = Instance.new("TextLabel")
-    subtitle.Size         = UDim2.new(0, 220, 1, -20)
-    subtitle.Position     = UDim2.new(0, 18, 0, 20)
+    subtitle.Size         = UDim2.New(0, 220, 1, -20)
+    subtitle.Position     = UDim2.New(0, 18, 0, 20)
     subtitle.BackgroundTransparency = 1
     subtitle.Font         = Enum.Font.Gotham
     subtitle.TextSize     = 12
@@ -1067,8 +1101,8 @@ local function CreateMenu()
     subtitle.Parent       = header
 
     local badge           = Instance.new("TextLabel")
-    badge.Size            = UDim2.new(0, 110, 0, 20)
-    badge.Position        = UDim2.new(1, -120, 0.5, -10)
+    badge.Size            = UDim2.New(0, 110, 0, 20)
+    badge.Position        = UDim2.New(1, -120, 0.5, -10)
     badge.BackgroundColor3 = COLORS.gold
     badge.BorderSizePixel = 0
     badge.Font            = Enum.Font.GothamBold
@@ -1079,7 +1113,7 @@ local function CreateMenu()
     badge.Parent          = header
 
     local badgeCorner     = Instance.new("UICorner")
-    badgeCorner.CornerRadius = UDim.new(0, 10)
+    badgeCorner.CornerRadius = UDim.New(0, 10)
     badgeCorner.Parent    = badge
 
     do
@@ -1106,7 +1140,7 @@ local function CreateMenu()
                 local mousePos = UserInputService:GetMouseLocation()
                 local delta    = mousePos - dragStart
 
-                MainFrame.Position = UDim2.new(
+                MainFrame.Position = UDim2.New(
                     startPos.X.Scale,
                     startPos.X.Offset + delta.X,
                     startPos.Y.Scale,
@@ -1117,8 +1151,8 @@ local function CreateMenu()
     end
 
     local sidebar         = Instance.new("Frame")
-    sidebar.Size          = UDim2.new(0, 130, 1, -46)
-    sidebar.Position      = UDim2.new(0, 0, 0, 46)
+    sidebar.Size          = UDim2.New(0, 130, 1, -46)
+    sidebar.Position      = UDim2.New(0, 0, 0, 46)
     sidebar.BackgroundColor3 = COLORS.navy
     sidebar.BackgroundTransparency = 0.1
     sidebar.BorderSizePixel = 0
@@ -1128,12 +1162,12 @@ local function CreateMenu()
     tabList.FillDirection = Enum.FillDirection.Vertical
     tabList.HorizontalAlignment = Enum.HorizontalAlignment.Left
     tabList.VerticalAlignment   = Enum.VerticalAlignment.Top
-    tabList.Padding       = UDim.new(0, 4)
+    tabList.Padding       = UDim.New(0, 4)
     tabList.Parent        = sidebar
 
     local function CreateTab(name, labelText, short)
         local btn                 = Instance.new("TextButton")
-        btn.Size                  = UDim2.new(1, 0, 0, 32)
+        btn.Size                  = UDim2.New(1, 0, 0, 32)
         btn.BackgroundTransparency = 1
         btn.BorderSizePixel       = 0
         btn.AutoButtonColor       = false
@@ -1145,8 +1179,8 @@ local function CreateMenu()
         btn.Parent                = sidebar
 
         local icon                = Instance.new("TextLabel")
-        icon.Size                 = UDim2.new(0, 18, 0, 18)
-        icon.Position             = UDim2.new(0, 10, 0.5, -9)
+        icon.Size                 = UDim2.New(0, 18, 0, 18)
+        icon.Position             = UDim2.New(0, 10, 0.5, -9)
         icon.BackgroundColor3     = COLORS.deepNavy
         icon.BorderSizePixel      = 0
         icon.Font                 = Enum.Font.GothamBold
@@ -1156,7 +1190,7 @@ local function CreateMenu()
         icon.Parent               = btn
 
         local iconCorner          = Instance.new("UICorner")
-        iconCorner.CornerRadius   = UDim.new(0, 4)
+        iconCorner.CornerRadius   = UDim.New(0, 4)
         iconCorner.Parent         = icon
 
         TabButtons[name]          = btn
@@ -1175,15 +1209,15 @@ local function CreateMenu()
 
     ContentFrame             = Instance.new("Frame")
     ContentFrame.Name        = "Content"
-    ContentFrame.Size        = UDim2.new(1, -130, 1, -46)
-    ContentFrame.Position    = UDim2.new(0, 130, 0, 46)
+    ContentFrame.Size        = UDim2.New(1, -130, 1, -46)
+    ContentFrame.Position    = UDim2.New(0, 130, 0, 46)
     ContentFrame.BackgroundColor3       = COLORS.deepNavy
     ContentFrame.BackgroundTransparency = 0.15
     ContentFrame.BorderSizePixel        = 0
     ContentFrame.Parent       = MainFrame
 
     local contentCorner       = Instance.new("UICorner")
-    contentCorner.CornerRadius = UDim.new(0, 6)
+    contentCorner.CornerRadius = UDim.New(0, 6)
     contentCorner.Parent      = ContentFrame
 
     SwitchTab("combat")
@@ -1274,9 +1308,12 @@ RunService.RenderStepped:Connect(function()
 
     if Aiming then
         AimLock()
+        if currentTarget and not IsValidTarget(currentTarget) then
+            currentTarget = nil
+        end
     end
 
-    if tick() - lastTargetCheck > 0.016 then
+    if tick() - lastTargetCheck > 0.05 then
         cachedTarget   = GetTargetFromFOV()
         lastTargetCheck = tick()
     end
@@ -1290,4 +1327,4 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
-Notify("Maia Z carregado • abra o menu e configure seus binds", 3)
+Notify("Maia Z carregado - abra o menu e configure seus binds", 3)
