@@ -1,107 +1,105 @@
 --======== KEYBINDS (DEFAULTS) ========
-local DEFAULT_AIM_KEY = Enum.KeyCode.X
-local DEFAULT_ESP_KEY = Enum.KeyCode.Z
-local DEFAULT_MENU_KEY = Enum.KeyCode.F1
+local DEFAULT_AIM_KEY   = Enum.KeyCode.X
+local DEFAULT_ESP_KEY   = Enum.KeyCode.Z
+local DEFAULT_MENU_KEY  = Enum.KeyCode.F1
 local DEFAULT_PANIC_KEY = Enum.KeyCode.P
 
-local AimKey = DEFAULT_AIM_KEY
-local EspKey = DEFAULT_ESP_KEY
-local MenuKey = DEFAULT_MENU_KEY
+local AimKey   = DEFAULT_AIM_KEY
+local EspKey   = DEFAULT_ESP_KEY
+local MenuKey  = DEFAULT_MENU_KEY
 local PanicKey = DEFAULT_PANIC_KEY
 
 --======== SERVICES ========
-local Players = game:GetService("Players")
+local Players          = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-local StarterGui = game:GetService("StarterGui")
-local Lighting = game:GetService("Lighting")
-local Workspace = game:GetService("Workspace")
+local RunService       = game:GetService("RunService")
+local StarterGui       = game:GetService("StarterGui")
+local Lighting         = game:GetService("Lighting")
+local Workspace        = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
-local Camera = Workspace.CurrentCamera
+local Camera      = Workspace.CurrentCamera
 
 --======== STATE ========
-local Aiming = false
-local ESPEnabled = true
-local MenuOpen = false
+local Aiming        = false
+local ESPEnabled    = true
+local MenuOpen      = false
 local currentTarget = nil
-local cachedTarget = nil
-local currentTab = "combat"
-local PanicMode = false
+local cachedTarget  = nil
+local currentTab    = "combat"
+local PanicMode     = false
 
 local PanicStored = {
-    Aiming = false,
+    Aiming     = false,
     ESPEnabled = true,
-    PerfEnabled = false,
-    MenuOpen = false,
+    PerfEnabled= false,
+    MenuOpen   = false,
 }
 
 -- configs
 local MAX_DISTANCE = 600
-local FOV_RADIUS = 90
-local SMOOTH_AMOUNT = 0.25
+local FOV_RADIUS   = 90
+local SMOOTH_AMOUNT= 0.25
 
 -- PERFORMANCE CONFIG
 local PERFORMANCE = {
-    enabled = false,
-    espUpdateSlow = 0.25,
-    espUpdateNormal = 0.10,
+    enabled          = false,
+    espUpdateSlow    = 0.25,
+    espUpdateNormal  = 0.10,
 }
 
 -- palette
 local COLORS = {
-    navy = Color3.fromRGB(10, 18, 32),
-    deepNavy = Color3.fromRGB(14, 24, 40),
-    gold = Color3.fromRGB(212, 175, 55),
-    cream = Color3.fromRGB(240, 236, 228),
-    slate = Color3.fromRGB(120, 130, 150),
-    accent = Color3.fromRGB(139, 166, 199),
-    danger = Color3.fromRGB(220, 80, 80),
-    success = Color3.fromRGB(46, 204, 113),
+    navy      = Color3.fromRGB(10, 18, 32),
+    deepNavy  = Color3.fromRGB(14, 24, 40),
+    gold      = Color3.fromRGB(212, 175, 55),
+    cream     = Color3.fromRGB(240, 236, 228),
+    slate     = Color3.fromRGB(120, 130, 150),
+    accent    = Color3.fromRGB(139, 166, 199),
+    danger    = Color3.fromRGB(220, 80, 80),
+    success   = Color3.fromRGB(46, 204, 113),
 }
 
 local ESP_OPTIONS = {
     highlight = true,
-    info = true,
+    info      = true,
     healthbar = true,
-    tracers = false,
+    tracers   = false,
 }
 
 local function KeyCodeToString(code)
-    if not code then
-        return "None"
-    end
+    if not code then return "None" end
     return tostring(code):gsub("Enum%.KeyCode%.", "")
 end
 
 local function Notify(text, dur)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
-            Title = "Maia Z",
-            Text = text,
+            Title    = "Maia Z",
+            Text     = text,
             Duration = dur or 2
         })
     end)
 end
 
 --======== FOV (DRAWING) ========
-local fovCircle = Drawing.new("Circle")
-fovCircle.Visible = true
-fovCircle.Radius = FOV_RADIUS
-fovCircle.Color = COLORS.gold
-fovCircle.Thickness = 2
+local fovCircle      = Drawing.new("Circle")
+fovCircle.Visible    = true
+fovCircle.Radius     = FOV_RADIUS
+fovCircle.Color      = COLORS.gold
+fovCircle.Thickness  = 2
 fovCircle.Transparency = 0.7
-fovCircle.Filled = false
-fovCircle.NumSides = 64
+fovCircle.Filled     = false
+fovCircle.NumSides   = 64
 
-local fovCircleInner = Drawing.new("Circle")
-fovCircleInner.Visible = false
-fovCircleInner.Radius = FOV_RADIUS - 10
-fovCircleInner.Color = COLORS.gold
-fovCircleInner.Thickness = 1
-fovCircleInner.Transparency = 0.5
-fovCircleInner.Filled = false
-fovCircleInner.NumSides = 64
+local fovCircleInner       = Drawing.new("Circle")
+fovCircleInner.Visible     = false
+fovCircleInner.Radius      = FOV_RADIUS - 10
+fovCircleInner.Color       = COLORS.gold
+fovCircleInner.Thickness   = 1
+fovCircleInner.Transparency= 0.5
+fovCircleInner.Filled      = false
+fovCircleInner.NumSides    = 64
 
 local function GetMouseScreenPos()
     local loc = UserInputService:GetMouseLocation()
@@ -110,25 +108,23 @@ end
 
 local function UpdateFOV()
     if PanicMode then
-        fovCircle.Visible = false
-        fovCircleInner.Visible = false
+        fovCircle.Visible     = false
+        fovCircleInner.Visible= false
         return
     end
 
-    fovCircle.Visible = true
-
     local mousePos = GetMouseScreenPos()
-    fovCircle.Position = mousePos
-    fovCircle.Radius = FOV_RADIUS
-
+    fovCircle.Visible   = true
+    fovCircle.Position  = mousePos
+    fovCircle.Radius    = FOV_RADIUS
     fovCircleInner.Position = mousePos
 
     if cachedTarget then
-        fovCircle.Color = COLORS.gold
-        fovCircleInner.Visible = true
+        fovCircle.Color       = COLORS.gold
+        fovCircleInner.Visible= true
     else
-        fovCircle.Color = COLORS.accent
-        fovCircleInner.Visible = false
+        fovCircle.Color       = COLORS.accent
+        fovCircleInner.Visible= false
     end
 
     if Aiming and currentTarget then
@@ -141,9 +137,7 @@ end
 
 --======== TARGET PART (HEAD/UPPERTORSO/HRP) ========
 local function GetAimPart(character)
-    if not character then
-        return nil
-    end
+    if not character then return nil end
 
     local head = character:FindFirstChild("Head")
     if head and head:IsA("BasePart") then
@@ -172,30 +166,29 @@ local function IsTeammate(plr)
 end
 
 local function IsValidTarget(plr)
-    if not plr or plr == LocalPlayer then
-        return false
-    end
+    if not plr or plr == LocalPlayer then return false end
 
     local char = plr.Character
-    if not char then
-        return false
-    end
+    if not char then return false end
 
-    local hum = char:FindFirstChildOfClass("Humanoid")
+    local hum  = char:FindFirstChildOfClass("Humanoid")
     local part = GetAimPart(char)
-    if not hum or not part then
-        return false
-    end
 
-    if hum.Health <= 0 then
-        return false
-    end
+    if not hum or not part then return false end
+    if hum.Health <= 0 then return false end
 
-    if hum.Health == math.huge or hum.MaxHealth == math.huge or hum.Health > 1e6 or hum.MaxHealth > 1e6 then
+    if hum.Health == math.huge or hum.MaxHealth == math.huge
+        or hum.Health > 1e6 or hum.MaxHealth > 1e6 then
         return false
     end
 
     if char:FindFirstChildOfClass("ForceField") then
+        return false
+    end
+
+    -- opcional: checar se está no campo de visão da câmera
+    local _, onScreen = Camera:WorldToViewportPoint(part.Position)
+    if not onScreen then
         return false
     end
 
@@ -208,17 +201,16 @@ local function WorldToViewport(pos)
 end
 
 local function GetTargetFromFOV()
-    if PanicMode then
-        return nil
-    end
+    if PanicMode then return nil end
 
-    local closest
-    local closestScreenDist = math.huge
+    local closest          = nil
+    local closestScreenDist= math.huge
+
     local mousePos = GetMouseScreenPos()
-    local camPos = Camera.CFrame.Position
+    local camPos   = Camera.CFrame.Position
 
     for _, plr in ipairs(Players:GetPlayers()) do
-        if IsValidTarget(plr) and not IsTeammate(plr) then
+        if not IsTeammate(plr) and IsValidTarget(plr) then
             local char = plr.Character
             local part = GetAimPart(char)
             if part then
@@ -229,7 +221,7 @@ local function GetTargetFromFOV()
                         local screenDist = (screenPos - mousePos).Magnitude
                         if screenDist <= FOV_RADIUS and screenDist < closestScreenDist then
                             closestScreenDist = screenDist
-                            closest = plr
+                            closest          = plr
                         end
                     end
                 end
@@ -253,43 +245,45 @@ local function AimLock()
             return
         end
 
-        local targetPos = part.Position
-        local targetCFrame = CFrame.new(Camera.CFrame.Position, targetPos)
+        local targetPos   = part.Position
+        local targetCFrame= CFrame.new(Camera.CFrame.Position, targetPos)
+
+        -- SMOOTH_AMOUNT menor = mais devagar; maior = mais "seco"
         Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, SMOOTH_AMOUNT)
         return
     end
 
+    -- se não tem target válido, tenta pegar um novo
     currentTarget = GetTargetFromFOV()
 end
 
+--======== ESP ========
 local function GetOrCreateHighlight(char)
     local hl = char:FindFirstChild("maiaz_ESP")
     if not hl then
-        hl = Instance.new("Highlight")
-        hl.Name = "maiaz_ESP"
-        hl.FillTransparency = 0.7
-        hl.OutlineTransparency = 0
-        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        hl.Parent = char
+        hl                       = Instance.new("Highlight")
+        hl.Name                  = "maiaz_ESP"
+        hl.FillTransparency      = 0.7
+        hl.OutlineTransparency   = 0
+        hl.DepthMode             = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Parent                = char
     end
     return hl
 end
 
 local tracers = {}
+
 local function GetOrCreateTracer(plr)
     if tracers[plr] and tracers[plr].__OBJECT then
         return tracers[plr].__OBJECT
     end
 
-    local line = Drawing.new("Line")
-    line.Visible = false
-    line.Thickness = 1.5
-    line.Transparency = 0.8
+    local line         = Drawing.new("Line")
+    line.Visible       = false
+    line.Thickness     = 1.5
+    line.Transparency  = 0.8
 
-    tracers[plr] = {
-        __OBJECT = line
-    }
-
+    tracers[plr]       = {__OBJECT = line}
     return line
 end
 
@@ -308,9 +302,7 @@ local function ClearAllESP()
         local char = plr.Character
         if char then
             local hl = char:FindFirstChild("maiaz_ESP")
-            if hl then
-                hl:Destroy()
-            end
+            if hl then hl:Destroy() end
 
             for _, v in ipairs(char:GetChildren()) do
                 if v:IsA("BillboardGui") and v.Name == "maiaz_Info" then
@@ -323,8 +315,20 @@ local function ClearAllESP()
 end
 
 local function UpdateESPForPlayer(plr)
-    if PanicMode then
+    -- se ESP desligado globalmente, limpa tudo desse player e sai
+    if not ESPEnabled or PanicMode then
         DestroyTracer(plr)
+        local char = plr.Character
+        if char then
+            local hl = char:FindFirstChild("maiaz_ESP")
+            if hl then hl.Enabled = false end
+
+            local head = GetAimPart(char)
+            if head then
+                local billboard = head:FindFirstChild("maiaz_Info")
+                if billboard then billboard.Enabled = false end
+            end
+        end
         return
     end
 
@@ -334,20 +338,17 @@ local function UpdateESPForPlayer(plr)
         return
     end
 
-    local hl = char:FindFirstChild("maiaz_ESP")
     local head = GetAimPart(char)
-    local billboard = nil
+    local hl   = char:FindFirstChild("maiaz_ESP")
+    local billboard
+
     if head then
         billboard = head:FindFirstChild("maiaz_Info")
     end
 
-    if not ESPEnabled or not IsValidTarget(plr) or IsTeammate(plr) then
-        if hl then
-            hl:Destroy()
-        end
-        if billboard then
-            billboard:Destroy()
-        end
+    if not IsValidTarget(plr) or IsTeammate(plr) then
+        if hl then hl.Enabled = false end
+        if billboard then billboard.Enabled = false end
         DestroyTracer(plr)
         return
     end
@@ -356,82 +357,82 @@ local function UpdateESPForPlayer(plr)
     if ESP_OPTIONS.highlight then
         hl = GetOrCreateHighlight(char)
         if plr == currentTarget then
-            hl.FillColor = COLORS.gold
+            hl.FillColor    = COLORS.gold
             hl.OutlineColor = COLORS.gold
         else
-            hl.FillColor = COLORS.accent
+            hl.FillColor    = COLORS.accent
             hl.OutlineColor = COLORS.accent
         end
         hl.Enabled = true
-    else
-        if hl then
-            hl:Destroy()
-        end
+    elseif hl then
+        hl.Enabled = false
     end
 
-    -- infos
+    -- infos (BillboardGui)
     if head and ESP_OPTIONS.info then
-        billboard = head:FindFirstChild("maiaz_Info")
         if not billboard then
-            billboard = Instance.new("BillboardGui")
-            billboard.Name = "maiaz_Info"
-            billboard.Size = UDim2.new(0, 110, 0, 40)
-            billboard.StudsOffset = Vector3.new(0, 2, 0)
-            billboard.AlwaysOnTop = true
-            billboard.Parent = head
+            billboard                 = Instance.new("BillboardGui")
+            billboard.Name            = "maiaz_Info"
+            billboard.Size            = UDim2.new(0, 110, 0, 40)
+            billboard.StudsOffset     = Vector3.new(0, 2, 0)
+            billboard.AlwaysOnTop     = true
+            billboard.Parent          = head
 
-            local text = Instance.new("TextLabel")
-            text.Name = "Label"
-            text.Size = UDim2.new(1, 0, 0.5, 0)
-            text.BackgroundTransparency = 1
-            text.Font = Enum.Font.GothamMedium
-            text.TextSize = 13
-            text.TextStrokeTransparency = 0.5
-            text.TextColor3 = COLORS.cream
-            text.TextXAlignment = Enum.TextXAlignment.Center
-            text.Parent = billboard
+            local text                = Instance.new("TextLabel")
+            text.Name                 = "Label"
+            text.Size                 = UDim2.new(1, 0, 0.5, 0)
+            text.BackgroundTransparency= 1
+            text.Font                 = Enum.Font.GothamMedium
+            text.TextSize             = 13
+            text.TextStrokeTransparency= 0.5
+            text.TextColor3           = COLORS.cream
+            text.TextXAlignment       = Enum.TextXAlignment.Center
+            text.Parent               = billboard
 
-            local barBg = Instance.new("Frame")
-            barBg.Name = "HPBG"
-            barBg.Size = UDim2.new(1, -14, 0, 6)
-            barBg.Position = UDim2.new(0, 7, 1, -8)
-            barBg.BackgroundColor3 = COLORS.deepNavy
-            barBg.BorderSizePixel = 0
-            barBg.Parent = billboard
+            local barBg               = Instance.new("Frame")
+            barBg.Name                = "HPBG"
+            barBg.Size                = UDim2.new(1, -14, 0, 6)
+            barBg.Position            = UDim2.new(0, 7, 1, -8)
+            barBg.BackgroundColor3    = COLORS.deepNavy
+            barBg.BorderSizePixel     = 0
+            barBg.Parent              = billboard
 
-            local barBgCorner = Instance.new("UICorner")
-            barBgCorner.CornerRadius = UDim.new(0, 3)
-            barBgCorner.Parent = barBg
+            local barBgCorner         = Instance.new("UICorner")
+            barBgCorner.CornerRadius  = UDim.new(0, 3)
+            barBgCorner.Parent        = barBg
 
-            local bar = Instance.new("Frame")
-            bar.Name = "HP"
-            bar.Size = UDim2.new(1, 0, 1, 0)
-            bar.BackgroundColor3 = COLORS.gold
-            bar.BorderSizePixel = 0
-            bar.Parent = barBg
+            local bar                 = Instance.new("Frame")
+            bar.Name                  = "HP"
+            bar.Size                  = UDim2.new(1, 0, 1, 0)
+            bar.BackgroundColor3      = COLORS.gold
+            bar.BorderSizePixel       = 0
+            bar.Parent                = barBg
 
-            local barCorner = Instance.new("UICorner")
-            barCorner.CornerRadius = UDim.new(0, 3)
-            barCorner.Parent = bar
+            local barCorner           = Instance.new("UICorner")
+            barCorner.CornerRadius    = UDim.new(0, 3)
+            barCorner.Parent          = bar
         end
 
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        local hp = hum and hum.Health or 0
+        billboard.Enabled = true
+
+        local hum   = char:FindFirstChildOfClass("Humanoid")
+        local hp    = hum and hum.Health or 0
         local maxHp = hum and hum.MaxHealth or 100
-        local dist = math.floor((head.Position - Camera.CFrame.Position).Magnitude)
+        local dist  = math.floor((head.Position - Camera.CFrame.Position).Magnitude)
 
         local label = billboard:FindFirstChild("Label")
-        local hpBg = billboard:FindFirstChild("HPBG")
+        local hpBg  = billboard:FindFirstChild("HPBG")
         local hpBar = hpBg and hpBg:FindFirstChild("HP")
 
         if label then
-            label.Text = string.format("%s\n%dm | %dHP", plr.Name, dist, math.floor(hp))
-            label.TextColor3 = plr == currentTarget and COLORS.gold or COLORS.cream
+            label.Text      = string.format("%s\n%dm | %dHP", plr.Name, dist, math.floor(hp))
+            label.TextColor3= plr == currentTarget and COLORS.gold or COLORS.cream
         end
 
         if ESP_OPTIONS.healthbar and hpBg and hpBar and maxHp > 0 then
             local ratio = math.clamp(hp / maxHp, 0, 1)
-            hpBar.Size = UDim2.new(ratio, 0, 1, 0)
+            hpBar.Size  = UDim2.new(ratio, 0, 1, 0)
+
             if ratio > 0.6 then
                 hpBar.BackgroundColor3 = COLORS.success
             elseif ratio > 0.3 then
@@ -440,31 +441,27 @@ local function UpdateESPForPlayer(plr)
                 hpBar.BackgroundColor3 = Color3.fromRGB(231, 76, 60)
             end
         end
-    else
-        if billboard then
-            billboard:Destroy()
-        end
+    elseif billboard then
+        billboard.Enabled = false
     end
 
     -- tracers
     local tracerObj = tracers[plr] and tracers[plr].__OBJECT or nil
     if ESP_OPTIONS.tracers and head then
-        local line = tracerObj or GetOrCreateTracer(plr)
+        local line               = tracerObj or GetOrCreateTracer(plr)
         local screenHead, onScreen = WorldToViewport(head.Position)
         if onScreen then
-            local viewportSize = Camera.ViewportSize
-            local from = Vector2.new(viewportSize.X / 2, viewportSize.Y)
-            line.From = from
-            line.To = screenHead
-            line.Color = plr == currentTarget and COLORS.gold or COLORS.accent
-            line.Visible = true
+            local viewportSize    = Camera.ViewportSize
+            local from            = Vector2.new(viewportSize.X / 2, viewportSize.Y)
+            line.From             = from
+            line.To               = screenHead
+            line.Color            = plr == currentTarget and COLORS.gold or COLORS.accent
+            line.Visible          = true
         else
-            line.Visible = false
+            line.Visible          = false
         end
-    else
-        if tracerObj then
-            tracerObj.Visible = false
-        end
+    elseif tracerObj then
+        tracerObj.Visible = false
     end
 end
 
@@ -474,8 +471,14 @@ local function UpdateAllESP()
         return
     end
 
-    local processed = 0
-    local maxPlayersPerTick = PERFORMANCE.enabled and 12 or math.huge
+    if not ESPEnabled then
+        -- não recria nada se o ESP estiver desligado
+        ClearAllESP()
+        return
+    end
+
+    local processed            = 0
+    local maxPlayersPerTick    = PERFORMANCE.enabled and 12 or math.huge
 
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer then
@@ -489,11 +492,11 @@ local function UpdateAllESP()
 end
 
 local function ForceRefreshESP()
-    if not ESPEnabled or PanicMode then
-        return
-    end
+    if PanicMode then return end
     ClearAllESP()
-    UpdateAllESP()
+    if ESPEnabled then
+        UpdateAllESP()
+    end
 end
 
 Players.PlayerAdded:Connect(function(plr)
@@ -508,7 +511,7 @@ end)
 Players.PlayerRemoving:Connect(function(plr)
     if plr == currentTarget then
         currentTarget = nil
-        Aiming = false
+        Aiming        = false
     end
     DestroyTracer(plr)
 end)
@@ -518,7 +521,9 @@ local function ApplyPerformanceMode(on)
     PERFORMANCE.enabled = on
 
     for _, obj in ipairs(Lighting:GetChildren()) do
-        if obj:IsA("BloomEffect") or obj:IsA("DepthOfFieldEffect") or obj:IsA("ColorCorrectionEffect") then
+        if obj:IsA("BloomEffect")
+        or obj:IsA("DepthOfFieldEffect")
+        or obj:IsA("ColorCorrectionEffect") then
             obj.Enabled = not on
         end
     end
@@ -541,21 +546,21 @@ local function TogglePanic()
     PanicMode = not PanicMode
 
     if PanicMode then
-        PanicStored.Aiming = Aiming
+        PanicStored.Aiming     = Aiming
         PanicStored.ESPEnabled = ESPEnabled
-        PanicStored.PerfEnabled = PERFORMANCE.enabled
-        PanicStored.MenuOpen = MenuOpen
+        PanicStored.PerfEnabled= PERFORMANCE.enabled
+        PanicStored.MenuOpen   = MenuOpen
 
-        Aiming = false
+        Aiming     = false
         ESPEnabled = false
-        MenuOpen = false
+        MenuOpen   = false
 
         if PERFORMANCE.enabled then
             ApplyPerformanceMode(false)
         end
 
         ClearAllESP()
-        fovCircle.Visible = false
+        fovCircle.Visible      = false
         fovCircleInner.Visible = false
 
         if HelpGui then
@@ -564,7 +569,7 @@ local function TogglePanic()
 
         Notify("Botão do Pânico - Maia Z OFF temporário", 2)
     else
-        Aiming = false
+        Aiming     = false
         ESPEnabled = PanicStored.ESPEnabled
 
         if PanicStored.PerfEnabled then
@@ -573,7 +578,7 @@ local function TogglePanic()
 
         MenuOpen = PanicStored.MenuOpen
 
-        fovCircle.Visible = true
+        fovCircle.Visible      = true
         fovCircleInner.Visible = false
 
         if HelpGui then
@@ -589,22 +594,20 @@ end
 local MainFrame
 local ContentFrame
 local TabButtons = {}
-local startTime = tick()
+local startTime  = tick()
 
 local Rebinding = {
     active = false,
     target = nil,
-    label = nil,
+    label  = nil,
 }
 
 local function BeginRebind(target, labelObj)
-    if Rebinding.active then
-        return
-    end
+    if Rebinding.active then return end
 
     Rebinding.active = true
     Rebinding.target = target
-    Rebinding.label = labelObj
+    Rebinding.label  = labelObj
 
     if labelObj then
         labelObj.Text = "Pressione uma tecla..."
@@ -617,7 +620,7 @@ local function FinishRebind(keyCode)
     if not Rebinding.active or not keyCode then
         Rebinding.active = false
         Rebinding.target = nil
-        Rebinding.label = nil
+        Rebinding.label  = nil
         return
     end
 
@@ -643,7 +646,7 @@ local function FinishRebind(keyCode)
 
     Rebinding.active = false
     Rebinding.target = nil
-    Rebinding.label = nil
+    Rebinding.label  = nil
 end
 
 local function CreateSlider(parent, name, desc, yPos, min, max, default, callback)
@@ -751,7 +754,7 @@ local function CreateToggle(parent, yPos, labelText, key)
     btn.TextSize = 14
     btn.TextXAlignment = Enum.TextXAlignment.Left
     btn.TextColor3 = COLORS.cream
-    btn.Text = "  " .. labelText
+    btn.Text = " " .. labelText
     btn.Parent = parent
 
     local corner = Instance.new("UICorner")
@@ -781,9 +784,10 @@ local function CreateToggle(parent, yPos, labelText, key)
     indCorner.Parent = indicator
 
     btn.MouseButton1Click:Connect(function()
+        if PanicMode then return end
         ESP_OPTIONS[key] = not ESP_OPTIONS[key]
         indicator.BackgroundColor3 = ESP_OPTIONS[key] and COLORS.gold or COLORS.slate
-        UpdateAllESP()
+        ForceRefreshESP()
     end)
 end
 
@@ -799,10 +803,10 @@ local function SwitchTab(tabName)
 
     for name, btn in pairs(TabButtons) do
         if name == tabName then
-            btn.TextColor3 = COLORS.gold
+            btn.TextColor3          = COLORS.gold
             btn.BackgroundTransparency = 0.1
         else
-            btn.TextColor3 = COLORS.slate
+            btn.TextColor3          = COLORS.slate
             btn.BackgroundTransparency = 1
         end
     end
@@ -866,10 +870,10 @@ local function SwitchTab(tabName)
         title.Text = "Visual Layer"
         title.Parent = ContentFrame
 
-        CreateToggle(ContentFrame, 50, "Highlight (contorno)", "highlight")
-        CreateToggle(ContentFrame, 92, "Infos (nome / distância / HP)", "info")
-        CreateToggle(ContentFrame, 134, "Healthbar (barra de vida)", "healthbar")
-        CreateToggle(ContentFrame, 176, "Tracers (linhas)", "tracers")
+        CreateToggle(ContentFrame, 50,  "Highlight (contorno)",              "highlight")
+        CreateToggle(ContentFrame, 92,  "Infos (nome / distância / HP)",      "info")
+        CreateToggle(ContentFrame, 134, "Healthbar (barra de vida)",          "healthbar")
+        CreateToggle(ContentFrame, 176, "Tracers (linhas)",                   "tracers")
 
         local espBtn = Instance.new("TextButton")
         espBtn.Name = "ESPButton"
@@ -889,13 +893,11 @@ local function SwitchTab(tabName)
         espCorner.Parent = espBtn
 
         espBtn.MouseButton1Click:Connect(function()
-            if PanicMode then
-                return
-            end
+            if PanicMode then return end
             ESPEnabled = not ESPEnabled
             espBtn.BackgroundColor3 = ESPEnabled and COLORS.gold or COLORS.slate
-            espBtn.TextColor3 = ESPEnabled and COLORS.navy or COLORS.cream
-            espBtn.Text = ESPEnabled and "ESP ATIVO" or "ESP DESATIVADO"
+            espBtn.TextColor3       = ESPEnabled and COLORS.navy or COLORS.cream
+            espBtn.Text             = ESPEnabled and "ESP ATIVO" or "ESP DESATIVADO"
             Notify(ESPEnabled and "ESP ativado" or "ESP desativado", 2)
             ForceRefreshESP()
         end)
@@ -943,12 +945,10 @@ local function SwitchTab(tabName)
         perfCorner.Parent = perfBtn
 
         perfBtn.MouseButton1Click:Connect(function()
-            if PanicMode then
-                return
-            end
+            if PanicMode then return end
             ApplyPerformanceMode(not PERFORMANCE.enabled)
             perfBtn.BackgroundColor3 = PERFORMANCE.enabled and COLORS.success or COLORS.danger
-            perfBtn.Text = PERFORMANCE.enabled and "MODO 0 LAG: ATIVO" or "MODO 0 LAG: DESATIVADO"
+            perfBtn.Text             = PERFORMANCE.enabled and "MODO 0 LAG: ATIVO" or "MODO 0 LAG: DESATIVADO"
         end)
 
     elseif tabName == "config" then
@@ -999,17 +999,15 @@ local function SwitchTab(tabName)
             corner.Parent = btn
 
             btn.MouseButton1Click:Connect(function()
-                if PanicMode then
-                    return
-                end
+                if PanicMode then return end
                 BeginRebind(setTarget, btn)
             end)
         end
 
-        CreateKeybindRow(50, "Aimlock", function() return AimKey end, "aim")
-        CreateKeybindRow(90, "ESP", function() return EspKey end, "esp")
-        CreateKeybindRow(130, "Menu", function() return MenuKey end, "menu")
-        CreateKeybindRow(170, "Botão do Pânico", function() return PanicKey end, "panic")
+        CreateKeybindRow(50,  "Aimlock",          function() return AimKey   end, "aim")
+        CreateKeybindRow(90,  "ESP",              function() return EspKey   end, "esp")
+        CreateKeybindRow(130, "Menu",             function() return MenuKey  end, "menu")
+        CreateKeybindRow(170, "Botão do Pânico",  function() return PanicKey end, "panic")
 
         local info = Instance.new("TextLabel")
         info.Size = UDim2.new(1, -40, 0, 60)
@@ -1043,7 +1041,7 @@ local function SwitchTab(tabName)
         panicBtn.MouseButton1Click:Connect(function()
             TogglePanic()
             panicBtn.BackgroundColor3 = PanicMode and COLORS.danger or COLORS.deepNavy
-            panicBtn.Text = PanicMode and "PANIC ATIVO" or "ATIVAR BOTÃO DO PÂNICO"
+            panicBtn.Text             = PanicMode and "PANIC ATIVO" or "ATIVAR BOTÃO DO PÂNICO"
         end)
 
     elseif tabName == "info" then
@@ -1165,9 +1163,9 @@ local function CreateMenu()
 
         header.InputBegan:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.MouseButton1 then
-                dragging = true
+                dragging  = true
                 dragStart = UserInputService:GetMouseLocation()
-                startPos = MainFrame.Position
+                startPos  = MainFrame.Position
             end
         end)
 
@@ -1180,7 +1178,7 @@ local function CreateMenu()
         UserInputService.InputChanged:Connect(function(input)
             if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
                 local mousePos = UserInputService:GetMouseLocation()
-                local delta = mousePos - dragStart
+                local delta    = mousePos - dragStart
                 MainFrame.Position = UDim2.new(
                     startPos.X.Scale,
                     startPos.X.Offset + delta.X,
@@ -1216,7 +1214,7 @@ local function CreateMenu()
         btn.TextSize = 13
         btn.TextColor3 = COLORS.slate
         btn.TextXAlignment = Enum.TextXAlignment.Left
-        btn.Text = "  " .. labelText
+        btn.Text = " " .. labelText
         btn.Parent = sidebar
 
         local icon = Instance.new("TextLabel")
@@ -1237,18 +1235,16 @@ local function CreateMenu()
         TabButtons[name] = btn
 
         btn.MouseButton1Click:Connect(function()
-            if PanicMode and name ~= "config" then
-                return
-            end
+            if PanicMode and name ~= "config" then return end
             SwitchTab(name)
         end)
     end
 
-    CreateTab("combat", "Combat", "C")
-    CreateTab("visual", "Visual", "V")
-    CreateTab("performance", "Perf", "P")
-    CreateTab("config", "Config", "K")
-    CreateTab("info", "Session", "S")
+    CreateTab("combat",      "Combat",  "C")
+    CreateTab("visual",      "Visual",  "V")
+    CreateTab("performance", "Perf",    "P")
+    CreateTab("config",      "Config",  "K")
+    CreateTab("info",        "Session", "S")
 
     ContentFrame = Instance.new("Frame")
     ContentFrame.Name = "Content"
@@ -1269,26 +1265,22 @@ end
 CreateMenu()
 
 local function ToggleMenu()
-    if not HelpGui or PanicMode then
-        return
-    end
-    MenuOpen = not MenuOpen
-    HelpGui.Enabled = MenuOpen
+    if not HelpGui or PanicMode then return end
+    MenuOpen       = not MenuOpen
+    HelpGui.Enabled= MenuOpen
 end
 
 local lastTargetCheck = 0
-local lastESPUpdate = 0
+local lastESPUpdate   = 0
 
 RunService.Heartbeat:Connect(function()
-    if PanicMode then
-        return
-    end
+    if PanicMode then return end
 
     if MenuOpen and currentTab == "combat" then
         local statusLabel = ContentFrame:FindFirstChild("StatusLabel", true)
         if statusLabel then
             local targetText = currentTarget and currentTarget.Name or "Nenhum alvo"
-            local aimStatus = Aiming and "Active" or "Idle"
+            local aimStatus  = Aiming and "Active" or "Idle"
             statusLabel.Text = string.format("%s • %s", aimStatus, targetText)
             statusLabel.TextColor3 = Aiming and COLORS.gold or COLORS.accent
         end
@@ -1298,16 +1290,14 @@ RunService.Heartbeat:Connect(function()
         local serverInfo = ContentFrame:FindFirstChild("ServerInfo", true)
         if serverInfo then
             local playerCount = #Players:GetPlayers()
-            local uptime = FormatTime(tick() - startTime)
-            serverInfo.Text = string.format("Jogadores: %d\nTempo ativo: %s", playerCount, uptime)
+            local uptime      = FormatTime(tick() - startTime)
+            serverInfo.Text   = string.format("Jogadores: %d\nTempo ativo: %s", playerCount, uptime)
         end
     end
 end)
 
 UserInputService.InputBegan:Connect(function(input, gp)
-    if gp then
-        return
-    end
+    if gp then return end
 
     if Rebinding.active and input.UserInputType == Enum.UserInputType.Keyboard then
         FinishRebind(input.KeyCode)
@@ -1319,12 +1309,12 @@ UserInputService.InputBegan:Connect(function(input, gp)
         return
     end
 
-    if PanicMode then
-        return
-    end
+    if PanicMode then return end
 
     if input.KeyCode == AimKey then
+        -- uso "hold"/toggle simples:
         Aiming = not Aiming
+
         if Aiming then
             currentTarget = GetTargetFromFOV()
             if currentTarget then
@@ -1337,7 +1327,8 @@ UserInputService.InputBegan:Connect(function(input, gp)
             Notify("Aimlock desativado", 2)
             currentTarget = nil
         end
-        ForceRefreshESP()
+
+        -- não forçar refresh de ESP aqui (evita resetar highlight o tempo todo)
     end
 
     if input.KeyCode == EspKey then
@@ -1354,9 +1345,7 @@ end)
 RunService.RenderStepped:Connect(function()
     UpdateFOV()
 
-    if PanicMode then
-        return
-    end
+    if PanicMode then return end
 
     if Aiming then
         AimLock()
@@ -1366,15 +1355,13 @@ RunService.RenderStepped:Connect(function()
     end
 
     if tick() - lastTargetCheck > 0.05 then
-        cachedTarget = GetTargetFromFOV()
+        cachedTarget  = ESPEnabled and GetTargetFromFOV() or nil
         lastTargetCheck = tick()
     end
 
     local interval = PERFORMANCE.enabled and PERFORMANCE.espUpdateSlow or PERFORMANCE.espUpdateNormal
     if tick() - lastESPUpdate > interval then
-        if ESPEnabled then
-            UpdateAllESP()
-        end
+        UpdateAllESP()
         lastESPUpdate = tick()
     end
 end)
