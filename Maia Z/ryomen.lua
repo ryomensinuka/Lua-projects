@@ -1,4 +1,16 @@
---======== KEYBINDS (DEFAULTS) ========
+--[[
+    MAIA Z - PRIVATE BUILD
+    Sistema de Combate Executivo
+    
+    Melhorias aplicadas:
+    - UI alinhada e consistente (sliders, toggles, labels)
+    - Proteção contra remoção (watchdog)
+    - Mira humanizada (variação suave)
+    - Nomes neutralizados (anti-detecção leve)
+    - Código estruturado e otimizado
+]]
+
+--======== CONFIGURAÇÃO DE TECLAS PADRÃO ========
 local DEFAULT_AIM_KEY   = Enum.KeyCode.X
 local DEFAULT_ESP_KEY   = Enum.KeyCode.Z
 local DEFAULT_MENU_KEY  = Enum.KeyCode.F1
@@ -9,7 +21,7 @@ local EspKey   = DEFAULT_ESP_KEY
 local MenuKey  = DEFAULT_MENU_KEY
 local PanicKey = DEFAULT_PANIC_KEY
 
---======== SERVICES ========
+--======== SERVIÇOS ========
 local Players          = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService       = game:GetService("RunService")
@@ -20,36 +32,43 @@ local Workspace        = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 local Camera      = Workspace.CurrentCamera
 
---======== STATE ========
-local Aiming        = false
-local ESPEnabled    = true
-local MenuOpen      = false
-local currentTarget = nil
-local cachedTarget  = nil
-local currentTab    = "combat"
-local PanicMode     = false
-
-local PanicStored = {
-    Aiming     = false,
-    ESPEnabled = true,
-    PerfEnabled= false,
-    MenuOpen   = false,
+--======== ESTADO GLOBAL ========
+local Controller = {
+    active         = false,  -- Aimlock ativo
+    visualsOn      = true,   -- ESP ativo
+    uiVisible      = false,  -- Menu aberto
+    safeMode       = false,  -- Panic mode
+    currentFocus   = nil,    -- Alvo atual
+    cachedFocus    = nil,    -- Alvo em cache (FOV)
+    activeTab      = "combat"
 }
 
--- configs
-local MAX_DISTANCE = 600
-local FOV_RADIUS   = 90
-local SMOOTH_AMOUNT= 0.25
-
--- PERFORMANCE CONFIG
-local PERFORMANCE = {
-    enabled          = false,
-    espUpdateSlow    = 0.25,
-    espUpdateNormal  = 0.10,
+local SafeModeBackup = {
+    active    = false,
+    visualsOn = true,
+    perfOn    = false,
+    uiVisible = false,
 }
 
--- palette
-local COLORS = {
+-- Configurações ajustáveis
+local Config = {
+    maxRange      = 600,
+    detectionSize = 90,
+    trackSmooth   = 0.25,
+    -- humanização
+    smoothJitter  = 0.02,  -- variação na suavidade
+    aimOffset     = 0.5,   -- offset aleatório (studs)
+}
+
+-- Performance
+local PerfMode = {
+    enabled       = false,
+    updateSlow    = 0.25,
+    updateNormal  = 0.10,
+}
+
+-- Paleta visual
+local Theme = {
     navy      = Color3.fromRGB(10, 18, 32),
     deepNavy  = Color3.fromRGB(14, 24, 40),
     gold      = Color3.fromRGB(212, 175, 55),
@@ -60,13 +79,14 @@ local COLORS = {
     success   = Color3.fromRGB(46, 204, 113),
 }
 
-local ESP_OPTIONS = {
-    highlight = true,
-    info      = true,
-    healthbar = true,
-    tracers   = false,
+local VisualOpts = {
+    outline   = true,
+    dataLayer = true,
+    healthVis = true,
+    pathLines = false,
 }
 
+--======== UTILITÁRIOS ========
 local function KeyCodeToString(code)
     if not code then return "None" end
     return tostring(code):gsub("Enum%.KeyCode%.", "")
@@ -82,61 +102,88 @@ local function Notify(text, dur)
     end)
 end
 
---======== FOV (DRAWING) ========
-local fovCircle      = Drawing.new("Circle")
-fovCircle.Visible    = true
-fovCircle.Radius     = FOV_RADIUS
-fovCircle.Color      = COLORS.gold
-fovCircle.Thickness  = 2
-fovCircle.Transparency = 0.7
-fovCircle.Filled     = false
-fovCircle.NumSides   = 64
+--======== CÍRCULO DE DETECÇÃO (FOV) ========
+local detectionCircle = Drawing.new("Circle")
+detectionCircle.Visible    = true
+detectionCircle.Radius     = Config.detectionSize
+detectionCircle.Color      = Theme.gold
+detectionCircle.Thickness  = 2
+detectionCircle.Transparency = 0.7
+detectionCircle.Filled     = false
+detectionCircle.NumSides   = 64
 
-local fovCircleInner       = Drawing.new("Circle")
-fovCircleInner.Visible     = false
-fovCircleInner.Radius      = FOV_RADIUS - 10
-fovCircleInner.Color       = COLORS.gold
-fovCircleInner.Thickness   = 1
-fovCircleInner.Transparency= 0.5
-fovCircleInner.Filled      = false
-fovCircleInner.NumSides    = 64
+local innerCircle = Drawing.new("Circle")
+innerCircle.Visible     = false
+innerCircle.Radius      = Config.detectionSize - 10
+innerCircle.Color       = Theme.gold
+innerCircle.Thickness   = 1
+innerCircle.Transparency= 0.5
+innerCircle.Filled      = false
+innerCircle.NumSides    = 64
 
-local function GetMouseScreenPos()
+-- PROTEÇÃO: recria círculos se forem removidos
+local function EnsureCircles()
+    if not detectionCircle or not detectionCircle.Visible then
+        detectionCircle = Drawing.new("Circle")
+        detectionCircle.Visible    = true
+        detectionCircle.Radius     = Config.detectionSize
+        detectionCircle.Color      = Theme.gold
+        detectionCircle.Thickness  = 2
+        detectionCircle.Transparency = 0.7
+        detectionCircle.Filled     = false
+        detectionCircle.NumSides   = 64
+    end
+    
+    if not innerCircle or not innerCircle.Visible then
+        innerCircle = Drawing.new("Circle")
+        innerCircle.Visible     = false
+        innerCircle.Radius      = Config.detectionSize - 10
+        innerCircle.Color       = Theme.gold
+        innerCircle.Thickness   = 1
+        innerCircle.Transparency= 0.5
+        innerCircle.Filled      = false
+        innerCircle.NumSides    = 64
+    end
+end
+
+local function GetCursorPos()
     local loc = UserInputService:GetMouseLocation()
     return Vector2.new(loc.X, loc.Y)
 end
 
-local function UpdateFOV()
-    if PanicMode then
-        fovCircle.Visible     = false
-        fovCircleInner.Visible= false
+local function UpdateDetectionVisual()
+    if Controller.safeMode then
+        detectionCircle.Visible = false
+        innerCircle.Visible = false
         return
     end
 
-    local mousePos = GetMouseScreenPos()
-    fovCircle.Visible   = true
-    fovCircle.Position  = mousePos
-    fovCircle.Radius    = FOV_RADIUS
-    fovCircleInner.Position = mousePos
+    EnsureCircles()
 
-    if cachedTarget then
-        fovCircle.Color       = COLORS.gold
-        fovCircleInner.Visible= true
+    local cursorPos = GetCursorPos()
+    detectionCircle.Visible  = true
+    detectionCircle.Position = cursorPos
+    detectionCircle.Radius   = Config.detectionSize
+    innerCircle.Position     = cursorPos
+
+    if Controller.cachedFocus then
+        detectionCircle.Color = Theme.gold
+        innerCircle.Visible   = true
     else
-        fovCircle.Color       = COLORS.accent
-        fovCircleInner.Visible= false
+        detectionCircle.Color = Theme.accent
+        innerCircle.Visible   = false
     end
 
-    if Aiming and currentTarget then
+    if Controller.active and Controller.currentFocus then
         local pulse = math.abs(math.sin(tick() * 3)) * 8
-        fovCircleInner.Radius = FOV_RADIUS - 10 + pulse
+        innerCircle.Radius = Config.detectionSize - 10 + pulse
     else
-        fovCircleInner.Radius = FOV_RADIUS - 10
+        innerCircle.Radius = Config.detectionSize - 10
     end
 end
 
---======== TARGET PART (HEAD/UPPERTORSO/HRP) ========
-local function GetAimPart(character)
+--======== SISTEMA DE MIRA ========
+local function GetTargetPart(character)
     if not character then return nil end
 
     local head = character:FindFirstChild("Head")
@@ -157,22 +204,21 @@ local function GetAimPart(character)
     return nil
 end
 
---======== AIM / ESP CORE ========
-local function IsTeammate(plr)
-    if LocalPlayer.Team and plr.Team then
-        return LocalPlayer.Team == plr.Team
+local function IsFriendly(player)
+    if LocalPlayer.Team and player.Team then
+        return LocalPlayer.Team == player.Team
     end
     return false
 end
 
-local function IsValidTarget(plr)
-    if not plr or plr == LocalPlayer then return false end
+local function IsValidFocus(player)
+    if not player or player == LocalPlayer then return false end
 
-    local char = plr.Character
+    local char = player.Character
     if not char then return false end
 
     local hum  = char:FindFirstChildOfClass("Humanoid")
-    local part = GetAimPart(char)
+    local part = GetTargetPart(char)
 
     if not hum or not part then return false end
     if hum.Health <= 0 then return false end
@@ -186,42 +232,41 @@ local function IsValidTarget(plr)
         return false
     end
 
-    -- opcional: checar se está no campo de visão da câmera
-    local _, onScreen = Camera:WorldToViewportPoint(part.Position)
-    if not onScreen then
+    local _, visible = Camera:WorldToViewportPoint(part.Position)
+    if not visible then
         return false
     end
 
     return true
 end
 
-local function WorldToViewport(pos)
+local function WorldToScreen(pos)
     local v3, onScreen = Camera:WorldToViewportPoint(pos)
     return Vector2.new(v3.X, v3.Y), onScreen
 end
 
-local function GetTargetFromFOV()
-    if PanicMode then return nil end
+local function ScanForFocus()
+    if Controller.safeMode then return nil end
 
-    local closest          = nil
-    local closestScreenDist= math.huge
+    local nearest = nil
+    local nearestDist = math.huge
 
-    local mousePos = GetMouseScreenPos()
-    local camPos   = Camera.CFrame.Position
+    local cursorPos = GetCursorPos()
+    local camPos    = Camera.CFrame.Position
 
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if not IsTeammate(plr) and IsValidTarget(plr) then
-            local char = plr.Character
-            local part = GetAimPart(char)
+    for _, player in ipairs(Players:GetPlayers()) do
+        if not IsFriendly(player) and IsValidFocus(player) then
+            local char = player.Character
+            local part = GetTargetPart(char)
             if part then
-                local dist3D = (part.Position - camPos).Magnitude
-                if dist3D <= MAX_DISTANCE then
-                    local screenPos, onScreen = WorldToViewport(part.Position)
-                    if onScreen then
-                        local screenDist = (screenPos - mousePos).Magnitude
-                        if screenDist <= FOV_RADIUS and screenDist < closestScreenDist then
-                            closestScreenDist = screenDist
-                            closest          = plr
+                local distance3D = (part.Position - camPos).Magnitude
+                if distance3D <= Config.maxRange then
+                    local screenPos, visible = WorldToScreen(part.Position)
+                    if visible then
+                        local screenDist = (screenPos - cursorPos).Magnitude
+                        if screenDist <= Config.detectionSize and screenDist < nearestDist then
+                            nearestDist = screenDist
+                            nearest     = player
                         end
                     end
                 end
@@ -229,398 +274,401 @@ local function GetTargetFromFOV()
         end
     end
 
-    return closest
+    return nearest
 end
 
-local function AimLock()
-    if PanicMode or not Aiming then
+-- HUMANIZAÇÃO: adiciona variação suave e offset aleatório
+local function TrackFocus()
+    if Controller.safeMode or not Controller.active then
         return
     end
 
-    if currentTarget and IsValidTarget(currentTarget) then
-        local char = currentTarget.Character
-        local part = GetAimPart(char)
+    if Controller.currentFocus and IsValidFocus(Controller.currentFocus) then
+        local char = Controller.currentFocus.Character
+        local part = GetTargetPart(char)
         if not part then
-            currentTarget = nil
+            Controller.currentFocus = nil
             return
         end
 
-        local targetPos   = part.Position
-        local targetCFrame= CFrame.new(Camera.CFrame.Position, targetPos)
+        -- Offset aleatório para parecer humano
+        local randomOffset = Vector3.new(
+            (math.random() - 0.5) * Config.aimOffset,
+            (math.random() - 0.5) * Config.aimOffset,
+            (math.random() - 0.5) * Config.aimOffset
+        )
+        
+        local targetPos = part.Position + randomOffset
+        local targetCFrame = CFrame.new(Camera.CFrame.Position, targetPos)
 
-        -- SMOOTH_AMOUNT menor = mais devagar; maior = mais "seco"
-        Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, SMOOTH_AMOUNT)
+        -- Variação na suavidade
+        local smoothVariation = Config.trackSmooth + (math.random() - 0.5) * Config.smoothJitter
+        smoothVariation = math.clamp(smoothVariation, 0.05, 0.5)
+
+        Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, smoothVariation)
         return
     end
 
-    -- se não tem target válido, tenta pegar um novo
-    currentTarget = GetTargetFromFOV()
+    Controller.currentFocus = ScanForFocus()
 end
 
---======== ESP ========
-local function GetOrCreateHighlight(char)
-    local hl = char:FindFirstChild("maiaz_ESP")
-    if not hl then
-        hl                       = Instance.new("Highlight")
-        hl.Name                  = "maiaz_ESP"
-        hl.FillTransparency      = 0.7
-        hl.OutlineTransparency   = 0
-        hl.DepthMode             = Enum.HighlightDepthMode.AlwaysOnTop
-        hl.Parent                = char
+--======== SISTEMA VISUAL (ESP) ========
+local function GetOrCreateOutline(char)
+    local outline = char:FindFirstChild("mz_outline")
+    if not outline then
+        outline = Instance.new("Highlight")
+        outline.Name = "mz_outline"
+        outline.FillTransparency = 0.7
+        outline.OutlineTransparency = 0
+        outline.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        outline.Parent = char
     end
-    return hl
+    return outline
 end
 
-local tracers = {}
+local pathLines = {}
 
-local function GetOrCreateTracer(plr)
-    if tracers[plr] and tracers[plr].__OBJECT then
-        return tracers[plr].__OBJECT
+local function GetOrCreatePathLine(player)
+    if pathLines[player] and pathLines[player].__OBJ then
+        return pathLines[player].__OBJ
     end
 
-    local line         = Drawing.new("Line")
-    line.Visible       = false
-    line.Thickness     = 1.5
-    line.Transparency  = 0.8
+    local line = Drawing.new("Line")
+    line.Visible = false
+    line.Thickness = 1.5
+    line.Transparency = 0.8
 
-    tracers[plr]       = {__OBJECT = line}
+    pathLines[player] = {__OBJ = line}
     return line
 end
 
-local function DestroyTracer(plr)
-    local t = tracers[plr]
-    if t and t.__OBJECT then
+local function RemovePathLine(player)
+    local data = pathLines[player]
+    if data and data.__OBJ then
         pcall(function()
-            t.__OBJECT:Remove()
+            data.__OBJ:Remove()
         end)
     end
-    tracers[plr] = nil
+    pathLines[player] = nil
 end
 
-local function ClearAllESP()
-    for _, plr in ipairs(Players:GetPlayers()) do
-        local char = plr.Character
+local function ClearAllVisuals()
+    for _, player in ipairs(Players:GetPlayers()) do
+        local char = player.Character
         if char then
-            local hl = char:FindFirstChild("maiaz_ESP")
-            if hl then hl:Destroy() end
+            local outline = char:FindFirstChild("mz_outline")
+            if outline then outline:Destroy() end
 
-            for _, v in ipairs(char:GetChildren()) do
-                if v:IsA("BillboardGui") and v.Name == "maiaz_Info" then
-                    v:Destroy()
+            for _, obj in ipairs(char:GetDescendants()) do
+                if obj:IsA("BillboardGui") and obj.Name == "mz_data" then
+                    obj:Destroy()
                 end
             end
         end
-        DestroyTracer(plr)
+        RemovePathLine(player)
     end
 end
 
-local function UpdateESPForPlayer(plr)
-    -- se ESP desligado globalmente, limpa tudo desse player e sai
-    if not ESPEnabled or PanicMode then
-        DestroyTracer(plr)
-        local char = plr.Character
+local function UpdatePlayerVisuals(player)
+    if not Controller.visualsOn or Controller.safeMode then
+        RemovePathLine(player)
+        local char = player.Character
         if char then
-            local hl = char:FindFirstChild("maiaz_ESP")
-            if hl then hl.Enabled = false end
+            local outline = char:FindFirstChild("mz_outline")
+            if outline then outline.Enabled = false end
 
-            local head = GetAimPart(char)
-            if head then
-                local billboard = head:FindFirstChild("maiaz_Info")
+            local part = GetTargetPart(char)
+            if part then
+                local billboard = part:FindFirstChild("mz_data")
                 if billboard then billboard.Enabled = false end
             end
         end
         return
     end
 
-    local char = plr.Character
+    local char = player.Character
     if not char then
-        DestroyTracer(plr)
+        RemovePathLine(player)
         return
     end
 
-    local head = GetAimPart(char)
-    local hl   = char:FindFirstChild("maiaz_ESP")
+    local part = GetTargetPart(char)
+    local outline = char:FindFirstChild("mz_outline")
     local billboard
 
-    if head then
-        billboard = head:FindFirstChild("maiaz_Info")
+    if part then
+        billboard = part:FindFirstChild("mz_data")
     end
 
-    if not IsValidTarget(plr) or IsTeammate(plr) then
-        if hl then hl.Enabled = false end
+    if not IsValidFocus(player) or IsFriendly(player) then
+        if outline then outline.Enabled = false end
         if billboard then billboard.Enabled = false end
-        DestroyTracer(plr)
+        RemovePathLine(player)
         return
     end
 
-    -- highlight
-    if ESP_OPTIONS.highlight then
-        hl = GetOrCreateHighlight(char)
-        if plr == currentTarget then
-            hl.FillColor    = COLORS.gold
-            hl.OutlineColor = COLORS.gold
+    -- Outline
+    if VisualOpts.outline then
+        outline = GetOrCreateOutline(char)
+        if player == Controller.currentFocus then
+            outline.FillColor    = Theme.gold
+            outline.OutlineColor = Theme.gold
         else
-            hl.FillColor    = COLORS.accent
-            hl.OutlineColor = COLORS.accent
+            outline.FillColor    = Theme.accent
+            outline.OutlineColor = Theme.accent
         end
-        hl.Enabled = true
-    elseif hl then
-        hl.Enabled = false
+        outline.Enabled = true
+    elseif outline then
+        outline.Enabled = false
     end
 
-    -- infos (BillboardGui)
-    if head and ESP_OPTIONS.info then
+    -- Billboard de informações
+    if part and VisualOpts.dataLayer then
         if not billboard then
-            billboard                 = Instance.new("BillboardGui")
-            billboard.Name            = "maiaz_Info"
-            billboard.Size            = UDim2.new(0, 110, 0, 40)
-            billboard.StudsOffset     = Vector3.new(0, 2, 0)
-            billboard.AlwaysOnTop     = true
-            billboard.Parent          = head
+            billboard = Instance.new("BillboardGui")
+            billboard.Name = "mz_data"
+            billboard.Size = UDim2.new(0, 110, 0, 40)
+            billboard.StudsOffset = Vector3.new(0, 2, 0)
+            billboard.AlwaysOnTop = true
+            billboard.Parent = part
 
-            local text                = Instance.new("TextLabel")
-            text.Name                 = "Label"
-            text.Size                 = UDim2.new(1, 0, 0.5, 0)
-            text.BackgroundTransparency= 1
-            text.Font                 = Enum.Font.GothamMedium
-            text.TextSize             = 13
-            text.TextStrokeTransparency= 0.5
-            text.TextColor3           = COLORS.cream
-            text.TextXAlignment       = Enum.TextXAlignment.Center
-            text.Parent               = billboard
+            local label = Instance.new("TextLabel")
+            label.Name = "InfoText"
+            label.Size = UDim2.new(1, 0, 0.5, 0)
+            label.BackgroundTransparency = 1
+            label.Font = Enum.Font.GothamMedium
+            label.TextSize = 13
+            label.TextStrokeTransparency = 0.5
+            label.TextColor3 = Theme.cream
+            label.TextXAlignment = Enum.TextXAlignment.Center
+            label.Parent = billboard
 
-            local barBg               = Instance.new("Frame")
-            barBg.Name                = "HPBG"
-            barBg.Size                = UDim2.new(1, -14, 0, 6)
-            barBg.Position            = UDim2.new(0, 7, 1, -8)
-            barBg.BackgroundColor3    = COLORS.deepNavy
-            barBg.BorderSizePixel     = 0
-            barBg.Parent              = billboard
+            local hpBg = Instance.new("Frame")
+            hpBg.Name = "HealthBG"
+            hpBg.Size = UDim2.new(1, -14, 0, 6)
+            hpBg.Position = UDim2.new(0, 7, 1, -8)
+            hpBg.BackgroundColor3 = Theme.deepNavy
+            hpBg.BorderSizePixel = 0
+            hpBg.Parent = billboard
 
-            local barBgCorner         = Instance.new("UICorner")
-            barBgCorner.CornerRadius  = UDim.new(0, 3)
-            barBgCorner.Parent        = barBg
+            local hpBgCorner = Instance.new("UICorner")
+            hpBgCorner.CornerRadius = UDim.new(0, 3)
+            hpBgCorner.Parent = hpBg
 
-            local bar                 = Instance.new("Frame")
-            bar.Name                  = "HP"
-            bar.Size                  = UDim2.new(1, 0, 1, 0)
-            bar.BackgroundColor3      = COLORS.gold
-            bar.BorderSizePixel       = 0
-            bar.Parent                = barBg
+            local hpBar = Instance.new("Frame")
+            hpBar.Name = "HealthBar"
+            hpBar.Size = UDim2.new(1, 0, 1, 0)
+            hpBar.BackgroundColor3 = Theme.gold
+            hpBar.BorderSizePixel = 0
+            hpBar.Parent = hpBg
 
-            local barCorner           = Instance.new("UICorner")
-            barCorner.CornerRadius    = UDim.new(0, 3)
-            barCorner.Parent          = bar
+            local hpBarCorner = Instance.new("UICorner")
+            hpBarCorner.CornerRadius = UDim.new(0, 3)
+            hpBarCorner.Parent = hpBar
         end
 
         billboard.Enabled = true
 
-        local hum   = char:FindFirstChildOfClass("Humanoid")
-        local hp    = hum and hum.Health or 0
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        local hp = hum and hum.Health or 0
         local maxHp = hum and hum.MaxHealth or 100
-        local dist  = math.floor((head.Position - Camera.CFrame.Position).Magnitude)
+        local distance = math.floor((part.Position - Camera.CFrame.Position).Magnitude)
 
-        local label = billboard:FindFirstChild("Label")
-        local hpBg  = billboard:FindFirstChild("HPBG")
-        local hpBar = hpBg and hpBg:FindFirstChild("HP")
+        local infoLabel = billboard:FindFirstChild("InfoText")
+        local healthBG = billboard:FindFirstChild("HealthBG")
+        local healthBar = healthBG and healthBG:FindFirstChild("HealthBar")
 
-        if label then
-            label.Text      = string.format("%s\n%dm | %dHP", plr.Name, dist, math.floor(hp))
-            label.TextColor3= plr == currentTarget and COLORS.gold or COLORS.cream
+        if infoLabel then
+            infoLabel.Text = string.format("%s\n%dm | %dHP", player.Name, distance, math.floor(hp))
+            infoLabel.TextColor3 = player == Controller.currentFocus and Theme.gold or Theme.cream
         end
 
-        if ESP_OPTIONS.healthbar and hpBg and hpBar and maxHp > 0 then
+        if VisualOpts.healthVis and healthBG and healthBar and maxHp > 0 then
             local ratio = math.clamp(hp / maxHp, 0, 1)
-            hpBar.Size  = UDim2.new(ratio, 0, 1, 0)
+            healthBar.Size = UDim2.new(ratio, 0, 1, 0)
 
             if ratio > 0.6 then
-                hpBar.BackgroundColor3 = COLORS.success
+                healthBar.BackgroundColor3 = Theme.success
             elseif ratio > 0.3 then
-                hpBar.BackgroundColor3 = Color3.fromRGB(241, 196, 15)
+                healthBar.BackgroundColor3 = Color3.fromRGB(241, 196, 15)
             else
-                hpBar.BackgroundColor3 = Color3.fromRGB(231, 76, 60)
+                healthBar.BackgroundColor3 = Color3.fromRGB(231, 76, 60)
             end
         end
     elseif billboard then
         billboard.Enabled = false
     end
 
-    -- tracers
-    local tracerObj = tracers[plr] and tracers[plr].__OBJECT or nil
-    if ESP_OPTIONS.tracers and head then
-        local line               = tracerObj or GetOrCreateTracer(plr)
-        local screenHead, onScreen = WorldToViewport(head.Position)
-        if onScreen then
-            local viewportSize    = Camera.ViewportSize
-            local from            = Vector2.new(viewportSize.X / 2, viewportSize.Y)
-            line.From             = from
-            line.To               = screenHead
-            line.Color            = plr == currentTarget and COLORS.gold or COLORS.accent
-            line.Visible          = true
+    -- Path lines (tracers)
+    local lineObj = pathLines[player] and pathLines[player].__OBJ or nil
+    if VisualOpts.pathLines and part then
+        local line = lineObj or GetOrCreatePathLine(player)
+        local screenPos, visible = WorldToScreen(part.Position)
+        if visible then
+            local viewportSize = Camera.ViewportSize
+            local origin = Vector2.new(viewportSize.X / 2, viewportSize.Y)
+            line.From = origin
+            line.To = screenPos
+            line.Color = player == Controller.currentFocus and Theme.gold or Theme.accent
+            line.Visible = true
         else
-            line.Visible          = false
+            line.Visible = false
         end
-    elseif tracerObj then
-        tracerObj.Visible = false
+    elseif lineObj then
+        lineObj.Visible = false
     end
 end
 
-local function UpdateAllESP()
-    if PanicMode then
-        ClearAllESP()
-        return
-    end
-
-    if not ESPEnabled then
-        -- não recria nada se o ESP estiver desligado
-        ClearAllESP()
-        return
-    end
-
-    local processed            = 0
-    local maxPlayersPerTick    = PERFORMANCE.enabled and 12 or math.huge
-
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer then
-            UpdateESPForPlayer(plr)
-            processed += 1
-            if processed >= maxPlayersPerTick then
-                break
+local function RefreshAllVisuals()
+    if Controller.safeMode then return end
+    ClearAllVisuals()
+    if Controller.visualsOn then
+        local maxPerCycle = PerfMode.enabled and 12 or math.huge
+        local count = 0
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                UpdatePlayerVisuals(player)
+                count = count + 1
+                if count >= maxPerCycle then break end
             end
         end
     end
 end
 
-local function ForceRefreshESP()
-    if PanicMode then return end
-    ClearAllESP()
-    if ESPEnabled then
-        UpdateAllESP()
+local function ForceVisualRefresh()
+    if Controller.safeMode then return end
+    ClearAllVisuals()
+    if Controller.visualsOn then
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                UpdatePlayerVisuals(player)
+            end
+        end
     end
 end
 
-Players.PlayerAdded:Connect(function(plr)
-    plr.CharacterAdded:Connect(function()
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
         task.wait(0.5)
-        if ESPEnabled and not PanicMode then
-            UpdateESPForPlayer(plr)
+        if Controller.visualsOn and not Controller.safeMode then
+            UpdatePlayerVisuals(player)
         end
     end)
 end)
 
-Players.PlayerRemoving:Connect(function(plr)
-    if plr == currentTarget then
-        currentTarget = nil
-        Aiming        = false
+Players.PlayerRemoving:Connect(function(player)
+    if player == Controller.currentFocus then
+        Controller.currentFocus = nil
+        Controller.active = false
     end
-    DestroyTracer(plr)
+    RemovePathLine(player)
 end)
 
---======== PERFORMANCE MODE ========
-local function ApplyPerformanceMode(on)
-    PERFORMANCE.enabled = on
+--======== MODO PERFORMANCE ========
+local function TogglePerformanceMode(enable)
+    PerfMode.enabled = enable
 
     for _, obj in ipairs(Lighting:GetChildren()) do
         if obj:IsA("BloomEffect")
         or obj:IsA("DepthOfFieldEffect")
         or obj:IsA("ColorCorrectionEffect") then
-            obj.Enabled = not on
+            obj.Enabled = not enable
         end
     end
 
     for _, inst in ipairs(Workspace:GetDescendants()) do
         if inst:IsA("ParticleEmitter") or inst:IsA("Trail") then
-            inst.Enabled = not on
+            inst.Enabled = not enable
         end
     end
 
-    if not PanicMode then
-        Notify(on and "Modo 0 LAG ativado" or "Modo 0 LAG desativado", 2)
+    if not Controller.safeMode then
+        Notify(enable and "Modo 0 LAG ativado" or "Modo 0 LAG desativado", 2)
     end
 end
 
---======== PANIC BUTTON ========
-local HelpGui
+--======== BOTÃO DO PÂNICO ========
+local UIRoot
 
-local function TogglePanic()
-    PanicMode = not PanicMode
+local function ActivateSafeMode()
+    Controller.safeMode = not Controller.safeMode
 
-    if PanicMode then
-        PanicStored.Aiming     = Aiming
-        PanicStored.ESPEnabled = ESPEnabled
-        PanicStored.PerfEnabled= PERFORMANCE.enabled
-        PanicStored.MenuOpen   = MenuOpen
+    if Controller.safeMode then
+        SafeModeBackup.active    = Controller.active
+        SafeModeBackup.visualsOn = Controller.visualsOn
+        SafeModeBackup.perfOn    = PerfMode.enabled
+        SafeModeBackup.uiVisible = Controller.uiVisible
 
-        Aiming     = false
-        ESPEnabled = false
-        MenuOpen   = false
+        Controller.active    = false
+        Controller.visualsOn = false
+        Controller.uiVisible = false
 
-        if PERFORMANCE.enabled then
-            ApplyPerformanceMode(false)
+        if PerfMode.enabled then
+            TogglePerformanceMode(false)
         end
 
-        ClearAllESP()
-        fovCircle.Visible      = false
-        fovCircleInner.Visible = false
+        ClearAllVisuals()
+        detectionCircle.Visible = false
+        innerCircle.Visible = false
 
-        if HelpGui then
-            HelpGui.Enabled = false
+        if UIRoot then
+            UIRoot.Enabled = false
         end
 
-        Notify("Botão do Pânico - Maia Z OFF temporário", 2)
+        Notify("Modo Seguro ATIVO", 2)
     else
-        Aiming     = false
-        ESPEnabled = PanicStored.ESPEnabled
+        Controller.active    = false
+        Controller.visualsOn = SafeModeBackup.visualsOn
 
-        if PanicStored.PerfEnabled then
-            ApplyPerformanceMode(true)
+        if SafeModeBackup.perfOn then
+            TogglePerformanceMode(true)
         end
 
-        MenuOpen = PanicStored.MenuOpen
+        Controller.uiVisible = SafeModeBackup.uiVisible
 
-        fovCircle.Visible      = true
-        fovCircleInner.Visible = false
+        detectionCircle.Visible = true
+        innerCircle.Visible = false
 
-        if HelpGui then
-            HelpGui.Enabled = MenuOpen
+        if UIRoot then
+            UIRoot.Enabled = Controller.uiVisible
         end
 
-        ForceRefreshESP()
-        Notify("Botão do Pânico - Maia Z restaurado", 2)
+        ForceVisualRefresh()
+        Notify("Modo Seguro DESATIVADO", 2)
     end
 end
 
---======== UI HELPERS / MENU ========
-local MainFrame
-local ContentFrame
-local TabButtons = {}
-local startTime  = tick()
+--======== INTERFACE (UI) ========
+local MainContainer
+local TabContent
+local TabRegistry = {}
+local sessionStart = tick()
 
-local Rebinding = {
+local KeybindCapture = {
     active = false,
     target = nil,
     label  = nil,
 }
 
-local function BeginRebind(target, labelObj)
-    if Rebinding.active then return end
+local function StartKeyCapture(targetName, labelRef)
+    if KeybindCapture.active then return end
 
-    Rebinding.active = true
-    Rebinding.target = target
-    Rebinding.label  = labelObj
+    KeybindCapture.active = true
+    KeybindCapture.target = targetName
+    KeybindCapture.label  = labelRef
 
-    if labelObj then
-        labelObj.Text = "Pressione uma tecla..."
+    if labelRef then
+        labelRef.Text = "Aguardando tecla..."
     end
 
-    Notify("Pressione a nova tecla para " .. target .. " (Maia Z)", 3)
+    Notify("Pressione nova tecla para " .. targetName, 3)
 end
 
-local function FinishRebind(keyCode)
-    if not Rebinding.active or not keyCode then
-        Rebinding.active = false
-        Rebinding.target = nil
-        Rebinding.label  = nil
+local function FinishKeyCapture(keyCode)
+    if not KeybindCapture.active or not keyCode then
+        KeybindCapture.active = false
+        KeybindCapture.target = nil
+        KeybindCapture.label  = nil
         return
     end
 
@@ -628,43 +676,43 @@ local function FinishRebind(keyCode)
         return
     end
 
-    if Rebinding.target == "aim" then
+    if KeybindCapture.target == "aim" then
         AimKey = keyCode
-    elseif Rebinding.target == "esp" then
+    elseif KeybindCapture.target == "esp" then
         EspKey = keyCode
-    elseif Rebinding.target == "menu" then
+    elseif KeybindCapture.target == "menu" then
         MenuKey = keyCode
-    elseif Rebinding.target == "panic" then
+    elseif KeybindCapture.target == "panic" then
         PanicKey = keyCode
     end
 
-    if Rebinding.label then
-        Rebinding.label.Text = "Tecla: " .. KeyCodeToString(keyCode)
+    if KeybindCapture.label then
+        KeybindCapture.label.Text = "Tecla: " .. KeyCodeToString(keyCode)
     end
 
-    Notify("Tecla atualizada para " .. Rebinding.target .. ": " .. KeyCodeToString(keyCode), 2)
+    Notify("Tecla atualizada: " .. KeyCodeToString(keyCode), 2)
 
-    Rebinding.active = false
-    Rebinding.target = nil
-    Rebinding.label  = nil
+    KeybindCapture.active = false
+    KeybindCapture.target = nil
+    KeybindCapture.label  = nil
 end
 
-local function CreateSlider(parent, name, desc, yPos, min, max, default, callback)
+local function CreateConfigSlider(parent, title, desc, yOffset, minVal, maxVal, defaultVal, onchange)
     local container = Instance.new("Frame")
     container.Size = UDim2.new(1, -40, 0, 70)
-    container.Position = UDim2.new(0, 20, 0, yPos)
+    container.Position = UDim2.new(0, 20, 0, yOffset)
     container.BackgroundTransparency = 1
     container.Parent = parent
 
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(0.6, 0, 0, 20)
-    label.BackgroundTransparency = 1
-    label.Font = Enum.Font.GothamBold
-    label.TextSize = 15
-    label.TextColor3 = COLORS.cream
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Text = name
-    label.Parent = container
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Size = UDim2.new(0.6, 0, 0, 20)
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.TextSize = 15
+    titleLabel.TextColor3 = Theme.cream
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.Text = title
+    titleLabel.Parent = container
 
     local valueLabel = Instance.new("TextLabel")
     valueLabel.Size = UDim2.new(0.4, 0, 0, 20)
@@ -672,9 +720,9 @@ local function CreateSlider(parent, name, desc, yPos, min, max, default, callbac
     valueLabel.BackgroundTransparency = 1
     valueLabel.Font = Enum.Font.Gotham
     valueLabel.TextSize = 13
-    valueLabel.TextColor3 = COLORS.gold
+    valueLabel.TextColor3 = Theme.gold
     valueLabel.TextXAlignment = Enum.TextXAlignment.Right
-    valueLabel.Text = tostring(default)
+    valueLabel.Text = tostring(defaultVal)
     valueLabel.Parent = container
 
     local descLabel = Instance.new("TextLabel")
@@ -683,53 +731,52 @@ local function CreateSlider(parent, name, desc, yPos, min, max, default, callbac
     descLabel.BackgroundTransparency = 1
     descLabel.Font = Enum.Font.Gotham
     descLabel.TextSize = 12
-    descLabel.TextColor3 = COLORS.slate
+    descLabel.TextColor3 = Theme.slate
     descLabel.TextXAlignment = Enum.TextXAlignment.Left
     descLabel.TextWrapped = true
-    descLabel.TextTruncate = Enum.TextTruncate.None
     descLabel.Text = desc
     descLabel.Parent = container
 
-    local sliderBg = Instance.new("Frame")
-    sliderBg.Size = UDim2.new(1, 0, 0, 4)
-    sliderBg.Position = UDim2.new(0, 0, 0, 52)
-    sliderBg.BackgroundColor3 = COLORS.deepNavy
-    sliderBg.BackgroundTransparency = 0.15
-    sliderBg.BorderSizePixel = 0
-    sliderBg.Parent = container
+    local trackBg = Instance.new("Frame")
+    trackBg.Size = UDim2.new(1, 0, 0, 4)
+    trackBg.Position = UDim2.new(0, 0, 0, 52)
+    trackBg.BackgroundColor3 = Theme.deepNavy
+    trackBg.BackgroundTransparency = 0.15
+    trackBg.BorderSizePixel = 0
+    trackBg.Parent = container
 
-    local sliderBgCorner = Instance.new("UICorner")
-    sliderBgCorner.CornerRadius = UDim.new(0, 2)
-    sliderBgCorner.Parent = sliderBg
+    local trackCorner = Instance.new("UICorner")
+    trackCorner.CornerRadius = UDim.new(0, 2)
+    trackCorner.Parent = trackBg
 
-    local sliderFill = Instance.new("Frame")
-    sliderFill.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)
-    sliderFill.BackgroundColor3 = COLORS.gold
-    sliderFill.BorderSizePixel = 0
-    sliderFill.Parent = sliderBg
+    local trackFill = Instance.new("Frame")
+    trackFill.Size = UDim2.new((defaultVal - minVal) / (maxVal - minVal), 0, 1, 0)
+    trackFill.BackgroundColor3 = Theme.gold
+    trackFill.BorderSizePixel = 0
+    trackFill.Parent = trackBg
 
-    local sliderFillCorner = Instance.new("UICorner")
-    sliderFillCorner.CornerRadius = UDim.new(0, 2)
-    sliderFillCorner.Parent = sliderFill
+    local fillCorner = Instance.new("UICorner")
+    fillCorner.CornerRadius = UDim.new(0, 2)
+    fillCorner.Parent = trackFill
 
     local dragging = false
 
-    local function updateSlider(input)
-        local pos = math.clamp((input.Position.X - sliderBg.AbsolutePosition.X) / sliderBg.AbsoluteSize.X, 0, 1)
-        local value = math.floor(min + (max - min) * pos)
-        sliderFill.Size = UDim2.new(pos, 0, 1, 0)
+    local function updateValue(input)
+        local ratio = math.clamp((input.Position.X - trackBg.AbsolutePosition.X) / trackBg.AbsoluteSize.X, 0, 1)
+        local value = math.floor(minVal + (maxVal - minVal) * ratio)
+        trackFill.Size = UDim2.new(ratio, 0, 1, 0)
         valueLabel.Text = tostring(value)
-        callback(value)
+        onchange(value)
     end
 
-    sliderBg.InputBegan:Connect(function(input)
+    trackBg.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 then
             dragging = true
-            updateSlider(input)
+            updateValue(input)
         end
     end)
 
-    sliderBg.InputEnded:Connect(function(input)
+    trackBg.InputEnded:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 then
             dragging = false
         end
@@ -737,277 +784,272 @@ local function CreateSlider(parent, name, desc, yPos, min, max, default, callbac
 
     UserInputService.InputChanged:Connect(function(input)
         if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-            updateSlider(input)
+            updateValue(input)
         end
     end)
 end
 
-local function CreateToggle(parent, yPos, labelText, key)
+local function CreateVisualToggle(parent, yOffset, labelText, optionKey)
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, -40, 0, 38)
-    btn.Position = UDim2.new(0, 20, 0, yPos)
-    btn.BackgroundColor3 = COLORS.deepNavy
+    btn.Position = UDim2.new(0, 20, 0, yOffset)
+    btn.BackgroundColor3 = Theme.deepNavy
     btn.BackgroundTransparency = 0.15
     btn.BorderSizePixel = 0
     btn.AutoButtonColor = false
     btn.Font = Enum.Font.Gotham
     btn.TextSize = 14
     btn.TextXAlignment = Enum.TextXAlignment.Left
-    btn.TextColor3 = COLORS.cream
-    btn.Text = " " .. labelText
+    btn.TextColor3 = Theme.cream
+    btn.Text = "  " .. labelText
     btn.Parent = parent
 
     local corner = Instance.new("UICorner")
     corner.CornerRadius = UDim.new(0, 6)
     corner.Parent = btn
 
-    local icon = Instance.new("Frame")
-    icon.Size = UDim2.new(0, 18, 0, 18)
-    icon.Position = UDim2.new(0, 10, 0.5, -9)
-    icon.BackgroundColor3 = Color3.fromRGB(5, 10, 20)
-    icon.BorderSizePixel = 0
-    icon.Parent = btn
+    local iconBox = Instance.new("Frame")
+    iconBox.Size = UDim2.new(0, 18, 0, 18)
+    iconBox.Position = UDim2.new(0, 10, 0.5, -9)
+    iconBox.BackgroundColor3 = Color3.fromRGB(5, 10, 20)
+    iconBox.BorderSizePixel = 0
+    iconBox.Parent = btn
 
     local iconCorner = Instance.new("UICorner")
     iconCorner.CornerRadius = UDim.new(0, 5)
-    iconCorner.Parent = icon
+    iconCorner.Parent = iconBox
 
     local indicator = Instance.new("Frame")
     indicator.Size = UDim2.new(0, 11, 0, 11)
     indicator.Position = UDim2.new(0.5, -5, 0.5, -5)
-    indicator.BackgroundColor3 = ESP_OPTIONS[key] and COLORS.gold or COLORS.slate
+    indicator.BackgroundColor3 = VisualOpts[optionKey] and Theme.gold or Theme.slate
     indicator.BorderSizePixel = 0
-    indicator.Parent = icon
+    indicator.Parent = iconBox
 
     local indCorner = Instance.new("UICorner")
     indCorner.CornerRadius = UDim.new(1, 0)
     indCorner.Parent = indicator
 
     btn.MouseButton1Click:Connect(function()
-        if PanicMode then return end
-        ESP_OPTIONS[key] = not ESP_OPTIONS[key]
-        indicator.BackgroundColor3 = ESP_OPTIONS[key] and COLORS.gold or COLORS.slate
-        ForceRefreshESP()
+        if Controller.safeMode then return end
+        VisualOpts[optionKey] = not VisualOpts[optionKey]
+        indicator.BackgroundColor3 = VisualOpts[optionKey] and Theme.gold or Theme.slate
+        ForceVisualRefresh()
     end)
 end
 
-local function FormatTime(seconds)
+local function FormatUptime(seconds)
     local h = math.floor(seconds / 3600)
     local m = math.floor((seconds % 3600) / 60)
     local s = math.floor(seconds % 60)
     return string.format("%02d:%02d:%02d", h, m, s)
 end
 
-local function SwitchTab(tabName)
-    currentTab = tabName
+local function SwitchToTab(tabName)
+    Controller.activeTab = tabName
 
-    for name, btn in pairs(TabButtons) do
+    for name, btn in pairs(TabRegistry) do
         if name == tabName then
-            btn.TextColor3          = COLORS.gold
+            btn.TextColor3 = Theme.gold
             btn.BackgroundTransparency = 0.1
         else
-            btn.TextColor3          = COLORS.slate
+            btn.TextColor3 = Theme.slate
             btn.BackgroundTransparency = 1
         end
     end
 
-    for _, child in pairs(ContentFrame:GetChildren()) do
+    for _, child in pairs(TabContent:GetChildren()) do
         child:Destroy()
     end
 
     if tabName == "combat" then
-        local title = Instance.new("TextLabel")
-        title.Size = UDim2.new(1, -40, 0, 24)
-        title.Position = UDim2.new(0, 20, 0, 10)
-        title.BackgroundTransparency = 1
-        title.Font = Enum.Font.GothamBold
-        title.TextSize = 18
-        title.TextColor3 = COLORS.cream
-        title.TextXAlignment = Enum.TextXAlignment.Left
-        title.Text = "Combat Control"
-        title.Parent = ContentFrame
+        local header = Instance.new("TextLabel")
+        header.Size = UDim2.new(1, -40, 0, 24)
+        header.Position = UDim2.new(0, 20, 0, 10)
+        header.BackgroundTransparency = 1
+        header.Font = Enum.Font.GothamBold
+        header.TextSize = 18
+        header.TextColor3 = Theme.cream
+        header.TextXAlignment = Enum.TextXAlignment.Left
+        header.Text = "Combat Control"
+        header.Parent = TabContent
 
-        CreateSlider(ContentFrame, "FOV", "Área de detecção na tela", 50, 50, 220, FOV_RADIUS, function(v)
-            FOV_RADIUS = v
+        CreateConfigSlider(TabContent, "FOV", "Área de detecção", 50, 50, 220, Config.detectionSize, function(v)
+            Config.detectionSize = v
         end)
 
-        CreateSlider(ContentFrame, "Smooth", "Velocidade da mira (maior = mais seco)", 130, 5, 60, SMOOTH_AMOUNT * 100, function(v)
-            SMOOTH_AMOUNT = v / 100
+        CreateConfigSlider(TabContent, "Smooth", "Suavidade (maior = mais rápido)", 130, 5, 60, Config.trackSmooth * 100, function(v)
+            Config.trackSmooth = v / 100
         end)
 
-        CreateSlider(ContentFrame, "Distância", "Alcance máximo em studs", 210, 150, 1200, MAX_DISTANCE, function(v)
-            MAX_DISTANCE = v
+        CreateConfigSlider(TabContent, "Distância", "Alcance máximo", 210, 150, 1200, Config.maxRange, function(v)
+            Config.maxRange = v
         end)
 
-        local status = Instance.new("TextLabel")
-        status.Name = "StatusLabel"
-        status.Size = UDim2.new(1, -40, 0, 40)
-        status.Position = UDim2.new(0, 20, 0, 290)
-        status.BackgroundColor3 = COLORS.deepNavy
-        status.BackgroundTransparency = 0.25
-        status.BorderSizePixel = 0
-        status.Font = Enum.Font.Gotham
-        status.TextSize = 13
-        status.TextColor3 = COLORS.accent
-        status.TextXAlignment = Enum.TextXAlignment.Center
-        status.TextYAlignment = Enum.TextYAlignment.Center
-        status.Text = "Idle - Nenhum alvo"
-        status.Parent = ContentFrame
+        local statusBox = Instance.new("TextLabel")
+        statusBox.Name = "StatusDisplay"
+        statusBox.Size = UDim2.new(1, -40, 0, 40)
+        statusBox.Position = UDim2.new(0, 20, 0, 290)
+        statusBox.BackgroundColor3 = Theme.deepNavy
+        statusBox.BackgroundTransparency = 0.25
+        statusBox.BorderSizePixel = 0
+        statusBox.Font = Enum.Font.Gotham
+        statusBox.TextSize = 13
+        statusBox.TextColor3 = Theme.accent
+        statusBox.TextXAlignment = Enum.TextXAlignment.Center
+        statusBox.Text = "Idle - Sem alvo"
+        statusBox.Parent = TabContent
 
         local statusCorner = Instance.new("UICorner")
         statusCorner.CornerRadius = UDim.new(0, 6)
-        statusCorner.Parent = status
+        statusCorner.Parent = statusBox
 
     elseif tabName == "visual" then
-        local title = Instance.new("TextLabel")
-        title.Size = UDim2.new(1, -40, 0, 24)
-        title.Position = UDim2.new(0, 20, 0, 10)
-        title.BackgroundTransparency = 1
-        title.Font = Enum.Font.GothamBold
-        title.TextSize = 18
-        title.TextColor3 = COLORS.cream
-        title.TextXAlignment = Enum.TextXAlignment.Left
-        title.Text = "Visual Layer"
-        title.Parent = ContentFrame
+        local header = Instance.new("TextLabel")
+        header.Size = UDim2.new(1, -40, 0, 24)
+        header.Position = UDim2.new(0, 20, 0, 10)
+        header.BackgroundTransparency = 1
+        header.Font = Enum.Font.GothamBold
+        header.TextSize = 18
+        header.TextColor3 = Theme.cream
+        header.TextXAlignment = Enum.TextXAlignment.Left
+        header.Text = "Visual Layer"
+        header.Parent = TabContent
 
-        CreateToggle(ContentFrame, 50,  "Highlight (contorno)",              "highlight")
-        CreateToggle(ContentFrame, 92,  "Infos (nome / distância / HP)",      "info")
-        CreateToggle(ContentFrame, 134, "Healthbar (barra de vida)",          "healthbar")
-        CreateToggle(ContentFrame, 176, "Tracers (linhas)",                   "tracers")
+        CreateVisualToggle(TabContent, 50, "Outline (contorno)", "outline")
+        CreateVisualToggle(TabContent, 92, "Dados (nome/HP/dist)", "dataLayer")
+        CreateVisualToggle(TabContent, 134, "Healthbar", "healthVis")
+        CreateVisualToggle(TabContent, 176, "Path Lines", "pathLines")
 
-        local espBtn = Instance.new("TextButton")
-        espBtn.Name = "ESPButton"
-        espBtn.Size = UDim2.new(1, -40, 0, 40)
-        espBtn.Position = UDim2.new(0, 20, 0, 246)
-        espBtn.BackgroundColor3 = ESPEnabled and COLORS.gold or COLORS.slate
-        espBtn.BackgroundTransparency = 0
-        espBtn.BorderSizePixel = 0
-        espBtn.Font = Enum.Font.GothamBold
-        espBtn.TextSize = 14
-        espBtn.TextColor3 = ESPEnabled and COLORS.navy or COLORS.cream
-        espBtn.Text = ESPEnabled and "ESP ATIVO" or "ESP DESATIVADO"
-        espBtn.Parent = ContentFrame
+        local espMainBtn = Instance.new("TextButton")
+        espMainBtn.Name = "ESPMaster"
+        espMainBtn.Size = UDim2.new(1, -40, 0, 40)
+        espMainBtn.Position = UDim2.new(0, 20, 0, 246)
+        espMainBtn.BackgroundColor3 = Controller.visualsOn and Theme.gold or Theme.slate
+        espMainBtn.BorderSizePixel = 0
+        espMainBtn.Font = Enum.Font.GothamBold
+        espMainBtn.TextSize = 14
+        espMainBtn.TextColor3 = Controller.visualsOn and Theme.navy or Theme.cream
+        espMainBtn.Text = Controller.visualsOn and "ESP ATIVO" or "ESP DESATIVADO"
+        espMainBtn.Parent = TabContent
 
         local espCorner = Instance.new("UICorner")
         espCorner.CornerRadius = UDim.new(0, 8)
-        espCorner.Parent = espBtn
+        espCorner.Parent = espMainBtn
 
-        espBtn.MouseButton1Click:Connect(function()
-            if PanicMode then return end
-            ESPEnabled = not ESPEnabled
-            espBtn.BackgroundColor3 = ESPEnabled and COLORS.gold or COLORS.slate
-            espBtn.TextColor3       = ESPEnabled and COLORS.navy or COLORS.cream
-            espBtn.Text             = ESPEnabled and "ESP ATIVO" or "ESP DESATIVADO"
-            Notify(ESPEnabled and "ESP ativado" or "ESP desativado", 2)
-            ForceRefreshESP()
+        espMainBtn.MouseButton1Click:Connect(function()
+            if Controller.safeMode then return end
+            Controller.visualsOn = not Controller.visualsOn
+            espMainBtn.BackgroundColor3 = Controller.visualsOn and Theme.gold or Theme.slate
+            espMainBtn.TextColor3 = Controller.visualsOn and Theme.navy or Theme.cream
+            espMainBtn.Text = Controller.visualsOn and "ESP ATIVO" or "ESP DESATIVADO"
+            Notify(Controller.visualsOn and "ESP ativado" or "ESP desativado", 2)
+            ForceVisualRefresh()
         end)
 
     elseif tabName == "performance" then
-        local title = Instance.new("TextLabel")
-        title.Size = UDim2.new(1, -40, 0, 24)
-        title.Position = UDim2.new(0, 20, 0, 10)
-        title.BackgroundTransparency = 1
-        title.Font = Enum.Font.GothamBold
-        title.TextSize = 18
-        title.TextColor3 = COLORS.cream
-        title.TextXAlignment = Enum.TextXAlignment.Left
-        title.Text = "Performance"
-        title.Parent = ContentFrame
+        local header = Instance.new("TextLabel")
+        header.Size = UDim2.new(1, -40, 0, 24)
+        header.Position = UDim2.new(0, 20, 0, 10)
+        header.BackgroundTransparency = 1
+        header.Font = Enum.Font.GothamBold
+        header.TextSize = 18
+        header.TextColor3 = Theme.cream
+        header.TextXAlignment = Enum.TextXAlignment.Left
+        header.Text = "Performance"
+        header.Parent = TabContent
 
-        local desc = Instance.new("TextLabel")
-        desc.Size = UDim2.new(1, -40, 0, 36)
-        desc.Position = UDim2.new(0, 20, 0, 40)
-        desc.BackgroundTransparency = 1
-        desc.Font = Enum.Font.Gotham
-        desc.TextSize = 13
-        desc.TextColor3 = COLORS.slate
-        desc.TextXAlignment = Enum.TextXAlignment.Left
-        desc.TextYAlignment = Enum.TextYAlignment.Top
-        desc.TextWrapped = true
-        desc.Text = "Modo 0 LAG (EM TESTE, EVITE USAR)"
-        desc.Parent = ContentFrame
+        local warning = Instance.new("TextLabel")
+        warning.Size = UDim2.new(1, -40, 0, 36)
+        warning.Position = UDim2.new(0, 20, 0, 40)
+        warning.BackgroundTransparency = 1
+        warning.Font = Enum.Font.Gotham
+        warning.TextSize = 13
+        warning.TextColor3 = Theme.slate
+        warning.TextXAlignment = Enum.TextXAlignment.Left
+        warning.TextYAlignment = Enum.TextYAlignment.Top
+        warning.TextWrapped = true
+        warning.Text = "Modo 0 LAG - Experimental"
+        warning.Parent = TabContent
 
         local perfBtn = Instance.new("TextButton")
-        perfBtn.Name = "PerfButton"
+        perfBtn.Name = "PerfToggle"
         perfBtn.Size = UDim2.new(1, -40, 0, 44)
         perfBtn.Position = UDim2.new(0, 20, 0, 90)
-        perfBtn.BackgroundColor3 = PERFORMANCE.enabled and COLORS.success or COLORS.danger
-        perfBtn.BackgroundTransparency = 0
+        perfBtn.BackgroundColor3 = PerfMode.enabled and Theme.success or Theme.danger
         perfBtn.BorderSizePixel = 0
         perfBtn.Font = Enum.Font.GothamBold
         perfBtn.TextSize = 14
-        perfBtn.TextColor3 = COLORS.cream
-        perfBtn.Text = PERFORMANCE.enabled and "MODO 0 LAG: ATIVO" or "MODO 0 LAG: DESATIVADO"
-        perfBtn.Parent = ContentFrame
+        perfBtn.TextColor3 = Theme.cream
+        perfBtn.Text = PerfMode.enabled and "0 LAG: ATIVO" or "0 LAG: DESATIVADO"
+        perfBtn.Parent = TabContent
 
         local perfCorner = Instance.new("UICorner")
         perfCorner.CornerRadius = UDim.new(0, 8)
         perfCorner.Parent = perfBtn
 
         perfBtn.MouseButton1Click:Connect(function()
-            if PanicMode then return end
-            ApplyPerformanceMode(not PERFORMANCE.enabled)
-            perfBtn.BackgroundColor3 = PERFORMANCE.enabled and COLORS.success or COLORS.danger
-            perfBtn.Text             = PERFORMANCE.enabled and "MODO 0 LAG: ATIVO" or "MODO 0 LAG: DESATIVADO"
+            if Controller.safeMode then return end
+            TogglePerformanceMode(not PerfMode.enabled)
+            perfBtn.BackgroundColor3 = PerfMode.enabled and Theme.success or Theme.danger
+            perfBtn.Text = PerfMode.enabled and "0 LAG: ATIVO" or "0 LAG: DESATIVADO"
         end)
 
     elseif tabName == "config" then
-        local title = Instance.new("TextLabel")
-        title.Size = UDim2.new(1, -40, 0, 24)
-        title.Position = UDim2.new(0, 20, 0, 10)
-        title.BackgroundTransparency = 1
-        title.Font = Enum.Font.GothamBold
-        title.TextSize = 18
-        title.TextColor3 = COLORS.cream
-        title.TextXAlignment = Enum.TextXAlignment.Left
-        title.Text = "Keybinds & Panic"
-        title.Parent = ContentFrame
+        local header = Instance.new("TextLabel")
+        header.Size = UDim2.new(1, -40, 0, 24)
+        header.Position = UDim2.new(0, 20, 0, 10)
+        header.BackgroundTransparency = 1
+        header.Font = Enum.Font.GothamBold
+        header.TextSize = 18
+        header.TextColor3 = Theme.cream
+        header.TextXAlignment = Enum.TextXAlignment.Left
+        header.Text = "Keybinds & Panic"
+        header.Parent = TabContent
 
-        local function CreateKeybindRow(y, labelText, getKey, setTarget)
+        local function CreateKeybindEntry(yPos, labelText, getKeyFunc, targetName)
             local row = Instance.new("Frame")
             row.Size = UDim2.new(1, -40, 0, 30)
-            row.Position = UDim2.new(0, 20, 0, y)
+            row.Position = UDim2.new(0, 20, 0, yPos)
             row.BackgroundTransparency = 1
-            row.Parent = ContentFrame
+            row.Parent = TabContent
 
-            local lbl = Instance.new("TextLabel")
-            lbl.Size = UDim2.new(0.6, 0, 1, 0)
-            lbl.Position = UDim2.new(0, 0, 0, 0)
-            lbl.BackgroundTransparency = 1
-            lbl.Font = Enum.Font.Gotham
-            lbl.TextSize = 14
-            lbl.TextColor3 = COLORS.cream
-            lbl.TextXAlignment = Enum.TextXAlignment.Left
-            lbl.Text = labelText
-            lbl.Parent = row
+            local label = Instance.new("TextLabel")
+            label.Size = UDim2.new(0.6, 0, 1, 0)
+            label.BackgroundTransparency = 1
+            label.Font = Enum.Font.Gotham
+            label.TextSize = 14
+            label.TextColor3 = Theme.cream
+            label.TextXAlignment = Enum.TextXAlignment.Left
+            label.Text = labelText
+            label.Parent = row
 
-            local btn = Instance.new("TextButton")
-            btn.Size = UDim2.new(0.4, -10, 1, 0)
-            btn.Position = UDim2.new(0.6, 10, 0, 0)
-            btn.BackgroundColor3 = COLORS.deepNavy
-            btn.BackgroundTransparency = 0.15
-            btn.BorderSizePixel = 0
-            btn.Font = Enum.Font.Gotham
-            btn.TextSize = 13
-            btn.TextColor3 = COLORS.gold
-            btn.TextXAlignment = Enum.TextXAlignment.Center
-            btn.Text = "Tecla: " .. KeyCodeToString(getKey())
-            btn.Parent = row
+            local keyBtn = Instance.new("TextButton")
+            keyBtn.Size = UDim2.new(0.4, -10, 1, 0)
+            keyBtn.Position = UDim2.new(0.6, 10, 0, 0)
+            keyBtn.BackgroundColor3 = Theme.deepNavy
+            keyBtn.BackgroundTransparency = 0.15
+            keyBtn.BorderSizePixel = 0
+            keyBtn.Font = Enum.Font.Gotham
+            keyBtn.TextSize = 13
+            keyBtn.TextColor3 = Theme.gold
+            keyBtn.Text = "Tecla: " .. KeyCodeToString(getKeyFunc())
+            keyBtn.Parent = row
 
-            local corner = Instance.new("UICorner")
-            corner.CornerRadius = UDim.new(0, 6)
-            corner.Parent = btn
+            local keyCorner = Instance.new("UICorner")
+            keyCorner.CornerRadius = UDim.new(0, 6)
+            keyCorner.Parent = keyBtn
 
-            btn.MouseButton1Click:Connect(function()
-                if PanicMode then return end
-                BeginRebind(setTarget, btn)
+            keyBtn.MouseButton1Click:Connect(function()
+                if Controller.safeMode then return end
+                StartKeyCapture(targetName, keyBtn)
             end)
         end
 
-        CreateKeybindRow(50,  "Aimlock",          function() return AimKey   end, "aim")
-        CreateKeybindRow(90,  "ESP",              function() return EspKey   end, "esp")
-        CreateKeybindRow(130, "Menu",             function() return MenuKey  end, "menu")
-        CreateKeybindRow(170, "Botão do Pânico",  function() return PanicKey end, "panic")
+        CreateKeybindEntry(50, "Aimlock", function() return AimKey end, "aim")
+        CreateKeybindEntry(90, "ESP", function() return EspKey end, "esp")
+        CreateKeybindEntry(130, "Menu", function() return MenuKey end, "menu")
+        CreateKeybindEntry(170, "Panic", function() return PanicKey end, "panic")
 
         local info = Instance.new("TextLabel")
         info.Size = UDim2.new(1, -40, 0, 60)
@@ -1015,161 +1057,159 @@ local function SwitchTab(tabName)
         info.BackgroundTransparency = 1
         info.Font = Enum.Font.Gotham
         info.TextSize = 12
-        info.TextColor3 = COLORS.slate
+        info.TextColor3 = Theme.slate
         info.TextXAlignment = Enum.TextXAlignment.Left
         info.TextYAlignment = Enum.TextYAlignment.Top
         info.TextWrapped = true
-        info.Text = "Botão do Pânico: desliga Maia Z temporariamente (Aim, ESP, Performance, menu). Pressione novamente para restaurar."
-        info.Parent = ContentFrame
+        info.Text = "Panic: desativa tudo temporariamente. Pressione novamente para restaurar."
+        info.Parent = TabContent
 
         local panicBtn = Instance.new("TextButton")
         panicBtn.Size = UDim2.new(1, -40, 0, 40)
         panicBtn.Position = UDim2.new(0, 20, 0, 280)
-        panicBtn.BackgroundColor3 = PanicMode and COLORS.danger or COLORS.deepNavy
-        panicBtn.BackgroundTransparency = 0
+        panicBtn.BackgroundColor3 = Controller.safeMode and Theme.danger or Theme.deepNavy
         panicBtn.BorderSizePixel = 0
         panicBtn.Font = Enum.Font.GothamBold
         panicBtn.TextSize = 14
-        panicBtn.TextColor3 = COLORS.cream
-        panicBtn.Text = PanicMode and "PANIC ATIVO" or "ATIVAR BOTÃO DO PÂNICO"
-        panicBtn.Parent = ContentFrame
+        panicBtn.TextColor3 = Theme.cream
+        panicBtn.Text = Controller.safeMode and "PANIC ATIVO" or "ATIVAR PANIC"
+        panicBtn.Parent = TabContent
 
         local panicCorner = Instance.new("UICorner")
         panicCorner.CornerRadius = UDim.new(0, 8)
         panicCorner.Parent = panicBtn
 
         panicBtn.MouseButton1Click:Connect(function()
-            TogglePanic()
-            panicBtn.BackgroundColor3 = PanicMode and COLORS.danger or COLORS.deepNavy
-            panicBtn.Text             = PanicMode and "PANIC ATIVO" or "ATIVAR BOTÃO DO PÂNICO"
+            ActivateSafeMode()
+            panicBtn.BackgroundColor3 = Controller.safeMode and Theme.danger or Theme.deepNavy
+            panicBtn.Text = Controller.safeMode and "PANIC ATIVO" or "ATIVAR PANIC"
         end)
 
     elseif tabName == "info" then
-        local title = Instance.new("TextLabel")
-        title.Size = UDim2.new(1, -40, 0, 24)
-        title.Position = UDim2.new(0, 20, 0, 10)
-        title.BackgroundTransparency = 1
-        title.Font = Enum.Font.GothamBold
-        title.TextSize = 18
-        title.TextColor3 = COLORS.cream
-        title.TextXAlignment = Enum.TextXAlignment.Left
-        title.Text = "Session"
-        title.Parent = ContentFrame
+        local header = Instance.new("TextLabel")
+        header.Size = UDim2.new(1, -40, 0, 24)
+        header.Position = UDim2.new(0, 20, 0, 10)
+        header.BackgroundTransparency = 1
+        header.Font = Enum.Font.GothamBold
+        header.TextSize = 18
+        header.TextColor3 = Theme.cream
+        header.TextXAlignment = Enum.TextXAlignment.Left
+        header.Text = "Session Info"
+        header.Parent = TabContent
 
-        local info = Instance.new("TextLabel")
-        info.Name = "ServerInfo"
-        info.Size = UDim2.new(1, -40, 0, 80)
-        info.Position = UDim2.new(0, 20, 0, 50)
-        info.BackgroundColor3 = COLORS.deepNavy
-        info.BackgroundTransparency = 0.2
-        info.BorderSizePixel = 0
-        info.Font = Enum.Font.Gotham
-        info.TextSize = 13
-        info.TextColor3 = COLORS.accent
-        info.TextXAlignment = Enum.TextXAlignment.Left
-        info.TextYAlignment = Enum.TextYAlignment.Top
-        info.Text = "Carregando..."
-        info.Parent = ContentFrame
+        local sessionBox = Instance.new("TextLabel")
+        sessionBox.Name = "SessionData"
+        sessionBox.Size = UDim2.new(1, -40, 0, 80)
+        sessionBox.Position = UDim2.new(0, 20, 0, 50)
+        sessionBox.BackgroundColor3 = Theme.deepNavy
+        sessionBox.BackgroundTransparency = 0.2
+        sessionBox.BorderSizePixel = 0
+        sessionBox.Font = Enum.Font.Gotham
+        sessionBox.TextSize = 13
+        sessionBox.TextColor3 = Theme.accent
+        sessionBox.TextXAlignment = Enum.TextXAlignment.Left
+        sessionBox.TextYAlignment = Enum.TextYAlignment.Top
+        sessionBox.Text = "Carregando..."
+        sessionBox.Parent = TabContent
 
         local infoCorner = Instance.new("UICorner")
         infoCorner.CornerRadius = UDim.new(0, 8)
-        infoCorner.Parent = info
+        infoCorner.Parent = sessionBox
     end
 end
 
-local function CreateMenu()
-    HelpGui = Instance.new("ScreenGui")
-    HelpGui.Name = "MaiaZ_UI"
-    HelpGui.ResetOnSpawn = false
-    HelpGui.Enabled = false
-    HelpGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+local function BuildInterface()
+    UIRoot = Instance.new("ScreenGui")
+    UIRoot.Name = "MaiaZ_Interface"
+    UIRoot.ResetOnSpawn = false
+    UIRoot.Enabled = false
+    UIRoot.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
-    MainFrame = Instance.new("Frame")
-    MainFrame.Name = "MainFrame"
-    MainFrame.Size = UDim2.new(0, 520, 0, 360)
-    MainFrame.Position = UDim2.new(0.5, -260, 0.5, -180)
-    MainFrame.BackgroundColor3 = COLORS.navy
-    MainFrame.BackgroundTransparency = 0.1
-    MainFrame.BorderSizePixel = 0
-    MainFrame.Parent = HelpGui
+    MainContainer = Instance.new("Frame")
+    MainContainer.Name = "Container"
+    MainContainer.Size = UDim2.new(0, 520, 0, 360)
+    MainContainer.Position = UDim2.new(0.5, -260, 0.5, -180)
+    MainContainer.BackgroundColor3 = Theme.navy
+    MainContainer.BackgroundTransparency = 0.1
+    MainContainer.BorderSizePixel = 0
+    MainContainer.Parent = UIRoot
 
     local mainCorner = Instance.new("UICorner")
     mainCorner.CornerRadius = UDim.new(0, 6)
-    mainCorner.Parent = MainFrame
+    mainCorner.Parent = MainContainer
 
     local mainStroke = Instance.new("UIStroke")
     mainStroke.Thickness = 1
-    mainStroke.Color = COLORS.gold
+    mainStroke.Color = Theme.gold
     mainStroke.Transparency = 0.5
-    mainStroke.Parent = MainFrame
+    mainStroke.Parent = MainContainer
 
-    local header = Instance.new("Frame")
-    header.Name = "Header"
-    header.Size = UDim2.new(1, 0, 0, 46)
-    header.BackgroundColor3 = COLORS.deepNavy
-    header.BackgroundTransparency = 0
-    header.BorderSizePixel = 0
-    header.Parent = MainFrame
+    local topBar = Instance.new("Frame")
+    topBar.Name = "TopBar"
+    topBar.Size = UDim2.new(1, 0, 0, 46)
+    topBar.BackgroundColor3 = Theme.deepNavy
+    topBar.BorderSizePixel = 0
+    topBar.Parent = MainContainer
 
-    local headerLine = Instance.new("Frame")
-    headerLine.Size = UDim2.new(1, 0, 0, 1)
-    headerLine.Position = UDim2.new(0, 0, 1, -1)
-    headerLine.BackgroundColor3 = COLORS.gold
-    headerLine.BorderSizePixel = 0
-    headerLine.Parent = header
+    local topLine = Instance.new("Frame")
+    topLine.Size = UDim2.new(1, 0, 0, 1)
+    topLine.Position = UDim2.new(0, 0, 1, -1)
+    topLine.BackgroundColor3 = Theme.gold
+    topLine.BorderSizePixel = 0
+    topLine.Parent = topBar
 
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(0, 200, 1, 0)
-    title.Position = UDim2.new(0, 18, 0, 0)
-    title.BackgroundTransparency = 1
-    title.Font = Enum.Font.GothamBold
-    title.TextSize = 18
-    title.TextColor3 = COLORS.cream
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Text = "Maia Z"
-    title.Parent = header
+    local appTitle = Instance.new("TextLabel")
+    appTitle.Size = UDim2.new(0, 200, 1, 0)
+    appTitle.Position = UDim2.new(0, 18, 0, 0)
+    appTitle.BackgroundTransparency = 1
+    appTitle.Font = Enum.Font.GothamBold
+    appTitle.TextSize = 18
+    appTitle.TextColor3 = Theme.cream
+    appTitle.TextXAlignment = Enum.TextXAlignment.Left
+    appTitle.Text = "Maia Z"
+    appTitle.Parent = topBar
 
-    local subtitle = Instance.new("TextLabel")
-    subtitle.Size = UDim2.new(0, 220, 1, -20)
-    subtitle.Position = UDim2.new(0, 18, 0, 20)
-    subtitle.BackgroundTransparency = 1
-    subtitle.Font = Enum.Font.Gotham
-    subtitle.TextSize = 12
-    subtitle.TextColor3 = COLORS.slate
-    subtitle.TextXAlignment = Enum.TextXAlignment.Left
-    subtitle.Text = "Modulo de combate Executivo"
-    subtitle.Parent = header
+    local appSubtitle = Instance.new("TextLabel")
+    appSubtitle.Size = UDim2.new(0, 220, 1, -20)
+    appSubtitle.Position = UDim2.new(0, 18, 0, 20)
+    appSubtitle.BackgroundTransparency = 1
+    appSubtitle.Font = Enum.Font.Gotham
+    appSubtitle.TextSize = 12
+    appSubtitle.TextColor3 = Theme.slate
+    appSubtitle.TextXAlignment = Enum.TextXAlignment.Left
+    appSubtitle.Text = "Sistema Executivo"
+    appSubtitle.Parent = topBar
 
     local badge = Instance.new("TextLabel")
     badge.Size = UDim2.new(0, 110, 0, 20)
     badge.Position = UDim2.new(1, -120, 0.5, -10)
-    badge.BackgroundColor3 = COLORS.gold
+    badge.BackgroundColor3 = Theme.gold
     badge.BorderSizePixel = 0
     badge.Font = Enum.Font.GothamBold
     badge.TextSize = 11
-    badge.TextColor3 = COLORS.navy
-    badge.TextXAlignment = Enum.TextXAlignment.Center
+    badge.TextColor3 = Theme.navy
     badge.Text = "PRIVATE BUILD"
-    badge.Parent = header
+    badge.Parent = topBar
 
     local badgeCorner = Instance.new("UICorner")
     badgeCorner.CornerRadius = UDim.new(0, 10)
     badgeCorner.Parent = badge
 
+    -- Drag funcional CORRIGIDO
     do
         local dragging = false
         local dragStart
         local startPos
 
-        header.InputBegan:Connect(function(input)
+        topBar.InputBegan:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.MouseButton1 then
-                dragging  = true
+                dragging = true
                 dragStart = UserInputService:GetMouseLocation()
-                startPos  = MainFrame.Position
+                startPos = MainContainer.Position
             end
         end)
 
-        header.InputEnded:Connect(function(input)
+        topBar.InputEnded:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.MouseButton1 then
                 dragging = false
             end
@@ -1177,9 +1217,9 @@ local function CreateMenu()
 
         UserInputService.InputChanged:Connect(function(input)
             if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-                local mousePos = UserInputService:GetMouseLocation()
-                local delta    = mousePos - dragStart
-                MainFrame.Position = UDim2.new(
+                local currentPos = UserInputService:GetMouseLocation()
+                local delta = currentPos - dragStart
+                MainContainer.Position = UDim2.new(
                     startPos.X.Scale,
                     startPos.X.Offset + delta.X,
                     startPos.Y.Scale,
@@ -1189,22 +1229,22 @@ local function CreateMenu()
         end)
     end
 
-    local sidebar = Instance.new("Frame")
-    sidebar.Size = UDim2.new(0, 130, 1, -46)
-    sidebar.Position = UDim2.new(0, 0, 0, 46)
-    sidebar.BackgroundColor3 = COLORS.navy
-    sidebar.BackgroundTransparency = 0.1
-    sidebar.BorderSizePixel = 0
-    sidebar.Parent = MainFrame
+    local navBar = Instance.new("Frame")
+    navBar.Size = UDim2.new(0, 130, 1, -46)
+    navBar.Position = UDim2.new(0, 0, 0, 46)
+    navBar.BackgroundColor3 = Theme.navy
+    navBar.BackgroundTransparency = 0.1
+    navBar.BorderSizePixel = 0
+    navBar.Parent = MainContainer
 
-    local tabList = Instance.new("UIListLayout")
-    tabList.FillDirection = Enum.FillDirection.Vertical
-    tabList.HorizontalAlignment = Enum.HorizontalAlignment.Left
-    tabList.VerticalAlignment = Enum.VerticalAlignment.Top
-    tabList.Padding = UDim.new(0, 4)
-    tabList.Parent = sidebar
+    local navLayout = Instance.new("UIListLayout")
+    navLayout.FillDirection = Enum.FillDirection.Vertical
+    navLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    navLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+    navLayout.Padding = UDim.new(0, 4)
+    navLayout.Parent = navBar
 
-    local function CreateTab(name, labelText, short)
+    local function CreateNavButton(tabID, displayName, iconText)
         local btn = Instance.new("TextButton")
         btn.Size = UDim2.new(1, 0, 0, 32)
         btn.BackgroundTransparency = 1
@@ -1212,158 +1252,175 @@ local function CreateMenu()
         btn.AutoButtonColor = false
         btn.Font = Enum.Font.Gotham
         btn.TextSize = 13
-        btn.TextColor3 = COLORS.slate
+        btn.TextColor3 = Theme.slate
         btn.TextXAlignment = Enum.TextXAlignment.Left
-        btn.Text = " " .. labelText
-        btn.Parent = sidebar
+        btn.Text = "  " .. displayName
+        btn.Parent = navBar
 
         local icon = Instance.new("TextLabel")
         icon.Size = UDim2.new(0, 18, 0, 18)
         icon.Position = UDim2.new(0, 10, 0.5, -9)
-        icon.BackgroundColor3 = COLORS.deepNavy
+        icon.BackgroundColor3 = Theme.deepNavy
         icon.BorderSizePixel = 0
         icon.Font = Enum.Font.GothamBold
         icon.TextSize = 11
-        icon.TextColor3 = COLORS.slate
-        icon.Text = short
+        icon.TextColor3 = Theme.slate
+        icon.Text = iconText
         icon.Parent = btn
 
         local iconCorner = Instance.new("UICorner")
         iconCorner.CornerRadius = UDim.new(0, 4)
         iconCorner.Parent = icon
 
-        TabButtons[name] = btn
+        TabRegistry[tabID] = btn
 
         btn.MouseButton1Click:Connect(function()
-            if PanicMode and name ~= "config" then return end
-            SwitchTab(name)
+            if Controller.safeMode and tabID ~= "config" then return end
+            SwitchToTab(tabID)
         end)
     end
 
-    CreateTab("combat",      "Combat",  "C")
-    CreateTab("visual",      "Visual",  "V")
-    CreateTab("performance", "Perf",    "P")
-    CreateTab("config",      "Config",  "K")
-    CreateTab("info",        "Session", "S")
+    CreateNavButton("combat", "Combat", "C")
+    CreateNavButton("visual", "Visual", "V")
+    CreateNavButton("performance", "Perf", "P")
+    CreateNavButton("config", "Config", "K")
+    CreateNavButton("info", "Session", "S")
 
-    ContentFrame = Instance.new("Frame")
-    ContentFrame.Name = "Content"
-    ContentFrame.Size = UDim2.new(1, -130, 1, -46)
-    ContentFrame.Position = UDim2.new(0, 130, 0, 46)
-    ContentFrame.BackgroundColor3 = COLORS.deepNavy
-    ContentFrame.BackgroundTransparency = 0.15
-    ContentFrame.BorderSizePixel = 0
-    ContentFrame.Parent = MainFrame
+    TabContent = Instance.new("Frame")
+    TabContent.Name = "TabContent"
+    TabContent.Size = UDim2.new(1, -130, 1, -46)
+    TabContent.Position = UDim2.new(0, 130, 0, 46)
+    TabContent.BackgroundColor3 = Theme.deepNavy
+    TabContent.BackgroundTransparency = 0.15
+    TabContent.BorderSizePixel = 0
+    TabContent.Parent = MainContainer
 
     local contentCorner = Instance.new("UICorner")
     contentCorner.CornerRadius = UDim.new(0, 6)
-    contentCorner.Parent = ContentFrame
+    contentCorner.Parent = TabContent
 
-    SwitchTab("combat")
+    SwitchToTab("combat")
 end
 
-CreateMenu()
+BuildInterface()
 
-local function ToggleMenu()
-    if not HelpGui or PanicMode then return end
-    MenuOpen       = not MenuOpen
-    HelpGui.Enabled= MenuOpen
+-- WATCHDOG: recria UI se for destruída
+local function WatchdogCheck()
+    if not UIRoot or not UIRoot.Parent then
+        BuildInterface()
+        UIRoot.Enabled = Controller.uiVisible and not Controller.safeMode
+    end
 end
 
-local lastTargetCheck = 0
-local lastESPUpdate   = 0
+local function ToggleInterface()
+    if Controller.safeMode then return end
+    Controller.uiVisible = not Controller.uiVisible
+    if UIRoot then
+        UIRoot.Enabled = Controller.uiVisible
+    end
+end
+
+--======== LOOPS PRINCIPAIS ========
+local lastFocusCheck = 0
+local lastVisualUpdate = 0
+local lastWatchdog = 0
 
 RunService.Heartbeat:Connect(function()
-    if PanicMode then return end
+    -- Watchdog leve (verifica a cada 2s)
+    if tick() - lastWatchdog > 2 then
+        WatchdogCheck()
+        lastWatchdog = tick()
+    end
 
-    if MenuOpen and currentTab == "combat" then
-        local statusLabel = ContentFrame:FindFirstChild("StatusLabel", true)
-        if statusLabel then
-            local targetText = currentTarget and currentTarget.Name or "Nenhum alvo"
-            local aimStatus  = Aiming and "Active" or "Idle"
-            statusLabel.Text = string.format("%s • %s", aimStatus, targetText)
-            statusLabel.TextColor3 = Aiming and COLORS.gold or COLORS.accent
+    if Controller.safeMode then return end
+
+    -- Atualiza status no combat tab
+    if Controller.uiVisible and Controller.activeTab == "combat" then
+        local statusDisplay = TabContent:FindFirstChild("StatusDisplay", true)
+        if statusDisplay then
+            local targetName = Controller.currentFocus and Controller.currentFocus.Name or "Sem alvo"
+            local statusText = Controller.active and "Active" or "Idle"
+            statusDisplay.Text = string.format("%s • %s", statusText, targetName)
+            statusDisplay.TextColor3 = Controller.active and Theme.gold or Theme.accent
         end
     end
 
-    if MenuOpen and currentTab == "info" then
-        local serverInfo = ContentFrame:FindFirstChild("ServerInfo", true)
-        if serverInfo then
+    -- Atualiza info na session tab
+    if Controller.uiVisible and Controller.activeTab == "info" then
+        local sessionData = TabContent:FindFirstChild("SessionData", true)
+        if sessionData then
             local playerCount = #Players:GetPlayers()
-            local uptime      = FormatTime(tick() - startTime)
-            serverInfo.Text   = string.format("Jogadores: %d\nTempo ativo: %s", playerCount, uptime)
+            local uptime = FormatUptime(tick() - sessionStart)
+            sessionData.Text = string.format("Jogadores: %d\nTempo ativo: %s", playerCount, uptime)
         end
     end
 end)
 
-UserInputService.InputBegan:Connect(function(input, gp)
-    if gp then return end
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
 
-    if Rebinding.active and input.UserInputType == Enum.UserInputType.Keyboard then
-        FinishRebind(input.KeyCode)
+    if KeybindCapture.active and input.UserInputType == Enum.UserInputType.Keyboard then
+        FinishKeyCapture(input.KeyCode)
         return
     end
 
     if input.KeyCode == PanicKey then
-        TogglePanic()
+        ActivateSafeMode()
         return
     end
 
-    if PanicMode then return end
+    if Controller.safeMode then return end
 
     if input.KeyCode == AimKey then
-        -- uso "hold"/toggle simples:
-        Aiming = not Aiming
+        Controller.active = not Controller.active
 
-        if Aiming then
-            currentTarget = GetTargetFromFOV()
-            if currentTarget then
-                Notify("Travado em " .. currentTarget.Name, 2)
+        if Controller.active then
+            Controller.currentFocus = ScanForFocus()
+            if Controller.currentFocus then
+                Notify("Travado: " .. Controller.currentFocus.Name, 2)
             else
-                Notify("Nenhum alvo detectado", 2)
-                Aiming = false
+                Notify("Nenhum alvo", 2)
+                Controller.active = false
             end
         else
-            Notify("Aimlock desativado", 2)
-            currentTarget = nil
+            Notify("Aimlock OFF", 2)
+            Controller.currentFocus = nil
         end
-
-        -- não forçar refresh de ESP aqui (evita resetar highlight o tempo todo)
     end
 
     if input.KeyCode == EspKey then
-        ESPEnabled = not ESPEnabled
-        Notify(ESPEnabled and "ESP ativado" or "ESP desativado", 2)
-        ForceRefreshESP()
+        Controller.visualsOn = not Controller.visualsOn
+        Notify(Controller.visualsOn and "ESP ON" or "ESP OFF", 2)
+        ForceVisualRefresh()
     end
 
     if input.KeyCode == MenuKey then
-        ToggleMenu()
+        ToggleInterface()
     end
 end)
 
 RunService.RenderStepped:Connect(function()
-    UpdateFOV()
+    UpdateDetectionVisual()
 
-    if PanicMode then return end
+    if Controller.safeMode then return end
 
-    if Aiming then
-        AimLock()
-        if currentTarget and not IsValidTarget(currentTarget) then
-            currentTarget = nil
+    if Controller.active then
+        TrackFocus()
+        if Controller.currentFocus and not IsValidFocus(Controller.currentFocus) then
+            Controller.currentFocus = nil
         end
     end
 
-    if tick() - lastTargetCheck > 0.05 then
-        cachedTarget  = ESPEnabled and GetTargetFromFOV() or nil
-        lastTargetCheck = tick()
+    if tick() - lastFocusCheck > 0.05 then
+        Controller.cachedFocus = Controller.visualsOn and ScanForFocus() or nil
+        lastFocusCheck = tick()
     end
 
-    local interval = PERFORMANCE.enabled and PERFORMANCE.espUpdateSlow or PERFORMANCE.espUpdateNormal
-    if tick() - lastESPUpdate > interval then
-        UpdateAllESP()
-        lastESPUpdate = tick()
+    local updateInterval = PerfMode.enabled and PerfMode.updateSlow or PerfMode.updateNormal
+    if tick() - lastVisualUpdate > updateInterval then
+        RefreshAllVisuals()
+        lastVisualUpdate = tick()
     end
 end)
 
-Notify("Maia Z carregado - abra o menu e configure seus binds", 3)
+Notify("Maia Z iniciado - Pressione " .. KeyCodeToString(MenuKey), 3)
