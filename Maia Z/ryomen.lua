@@ -1,86 +1,80 @@
---[[
-    MAIA Z - PRIVATE BUILD
-    Sistema de Combate Executivo
-    
-    Melhorias aplicadas:
-    - UI alinhada e consistente (sliders, toggles, labels)
-    - Proteção contra remoção (watchdog)
-    - Mira humanizada (variação suave)
-    - Nomes neutralizados (anti-detecção leve)
-    - Código estruturado e otimizado
+--[[ MAIA Z - PRIVATE BUILD (OTIMIZADO)
+   - Menos chamadas a ScanForFocus (cooldown + cache)
+   - ESP em batch (players divididos por ciclos)
+   - Sliders com InputChanged compartilhado
+   - Círculos/Drawing e UI recriados só quando realmente destruídos
 ]]
 
 --======== CONFIGURAÇÃO DE TECLAS PADRÃO ========
-local DEFAULT_AIM_KEY   = Enum.KeyCode.X
-local DEFAULT_ESP_KEY   = Enum.KeyCode.Z
-local DEFAULT_MENU_KEY  = Enum.KeyCode.F1
+local DEFAULT_AIM_KEY = Enum.KeyCode.X
+local DEFAULT_ESP_KEY = Enum.KeyCode.Z
+local DEFAULT_MENU_KEY = Enum.KeyCode.F1
 local DEFAULT_PANIC_KEY = Enum.KeyCode.P
 
-local AimKey   = DEFAULT_AIM_KEY
-local EspKey   = DEFAULT_ESP_KEY
-local MenuKey  = DEFAULT_MENU_KEY
+local AimKey = DEFAULT_AIM_KEY
+local EspKey = DEFAULT_ESP_KEY
+local MenuKey = DEFAULT_MENU_KEY
 local PanicKey = DEFAULT_PANIC_KEY
 
 --======== SERVIÇOS ========
-local Players          = game:GetService("Players")
+local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
-local RunService       = game:GetService("RunService")
-local StarterGui       = game:GetService("StarterGui")
-local Lighting         = game:GetService("Lighting")
-local Workspace        = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
+local Lighting = game:GetService("Lighting")
+local Workspace = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
-local Camera      = Workspace.CurrentCamera
+local Camera = Workspace.CurrentCamera
 
 --======== ESTADO GLOBAL ========
 local Controller = {
-    active         = false,  -- Aimlock ativo
-    visualsOn      = true,   -- ESP ativo
-    uiVisible      = false,  -- Menu aberto
-    safeMode       = false,  -- Panic mode
-    currentFocus   = nil,    -- Alvo atual
-    cachedFocus    = nil,    -- Alvo em cache (FOV)
-    activeTab      = "combat"
+    active = false,      -- mira ativa
+    visualsOn = true,    -- ESP ligado
+    uiVisible = false,   -- menu aberto
+    safeMode = false,    -- modo pânico
+    currentFocus = nil,  -- alvo atual travado
+    cachedFocus = nil,   -- alvo em cache (FOV)
+    activeTab = "combat"
 }
 
 local SafeModeBackup = {
-    active    = false,
+    active = false,
     visualsOn = true,
-    perfOn    = false,
+    perfOn = false,
     uiVisible = false,
 }
 
--- Configurações ajustáveis
+-- Config
 local Config = {
-    maxRange      = 600,
+    maxRange = 600,
     detectionSize = 90,
-    trackSmooth   = 0.25,
-    -- humanização
-    smoothJitter  = 0.02,  -- variação na suavidade
-    aimOffset     = 0.5,   -- offset aleatório (studs)
+    trackSmooth = 0.25,
+    smoothJitter = 0.02,
+    aimOffset = 0.5,
 }
 
 -- Performance
 local PerfMode = {
-    enabled       = false,
-    updateSlow    = 0.25,
-    updateNormal  = 0.10,
+    enabled = false,
+    updateSlow = 0.25,
+    updateNormal = 0.10,
 }
 
--- Paleta visual
+-- Tema
 local Theme = {
-    navy      = Color3.fromRGB(10, 18, 32),
-    deepNavy  = Color3.fromRGB(14, 24, 40),
-    gold      = Color3.fromRGB(212, 175, 55),
-    cream     = Color3.fromRGB(240, 236, 228),
-    slate     = Color3.fromRGB(120, 130, 150),
-    accent    = Color3.fromRGB(139, 166, 199),
-    danger    = Color3.fromRGB(220, 80, 80),
-    success   = Color3.fromRGB(46, 204, 113),
+    navy = Color3.fromRGB(10, 18, 32),
+    deepNavy = Color3.fromRGB(14, 24, 40),
+    gold = Color3.fromRGB(212, 175, 55),
+    cream = Color3.fromRGB(240, 236, 228),
+    slate = Color3.fromRGB(120, 130, 150),
+    accent = Color3.fromRGB(139, 166, 199),
+    danger = Color3.fromRGB(220, 80, 80),
+    success = Color3.fromRGB(46, 204, 113),
 }
 
 local VisualOpts = {
-    outline   = true,
+    outline = true,
     dataLayer = true,
     healthVis = true,
     pathLines = false,
@@ -88,15 +82,17 @@ local VisualOpts = {
 
 --======== UTILITÁRIOS ========
 local function KeyCodeToString(code)
-    if not code then return "None" end
-    return tostring(code):gsub("Enum%.KeyCode%.", "")
+    if not code then
+        return "None"
+    end
+    return tostring(code):gsub("Enum.KeyCode.", "")
 end
 
 local function Notify(text, dur)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
-            Title    = "Maia Z",
-            Text     = text,
+            Title = "Maia Z",
+            Text = text,
             Duration = dur or 2
         })
     end)
@@ -104,45 +100,45 @@ end
 
 --======== CÍRCULO DE DETECÇÃO (FOV) ========
 local detectionCircle = Drawing.new("Circle")
-detectionCircle.Visible    = true
-detectionCircle.Radius     = Config.detectionSize
-detectionCircle.Color      = Theme.gold
-detectionCircle.Thickness  = 2
+detectionCircle.Visible = true
+detectionCircle.Radius = Config.detectionSize
+detectionCircle.Color = Theme.gold
+detectionCircle.Thickness = 2
 detectionCircle.Transparency = 0.7
-detectionCircle.Filled     = false
-detectionCircle.NumSides   = 64
+detectionCircle.Filled = false
+detectionCircle.NumSides = 64
 
 local innerCircle = Drawing.new("Circle")
-innerCircle.Visible     = false
-innerCircle.Radius      = Config.detectionSize - 10
-innerCircle.Color       = Theme.gold
-innerCircle.Thickness   = 1
-innerCircle.Transparency= 0.5
-innerCircle.Filled      = false
-innerCircle.NumSides    = 64
+innerCircle.Visible = false
+innerCircle.Radius = Config.detectionSize - 10
+innerCircle.Color = Theme.gold
+innerCircle.Thickness = 1
+innerCircle.Transparency = 0.5
+innerCircle.Filled = false
+innerCircle.NumSides = 64
 
--- PROTEÇÃO: recria círculos se forem removidos
+-- Só recria se o objeto for nil (não apenas invisível)
 local function EnsureCircles()
-    if not detectionCircle or not detectionCircle.Visible then
+    if not detectionCircle then
         detectionCircle = Drawing.new("Circle")
-        detectionCircle.Visible    = true
-        detectionCircle.Radius     = Config.detectionSize
-        detectionCircle.Color      = Theme.gold
-        detectionCircle.Thickness  = 2
+        detectionCircle.Visible = true
+        detectionCircle.Radius = Config.detectionSize
+        detectionCircle.Color = Theme.gold
+        detectionCircle.Thickness = 2
         detectionCircle.Transparency = 0.7
-        detectionCircle.Filled     = false
-        detectionCircle.NumSides   = 64
+        detectionCircle.Filled = false
+        detectionCircle.NumSides = 64
     end
-    
-    if not innerCircle or not innerCircle.Visible then
+
+    if not innerCircle then
         innerCircle = Drawing.new("Circle")
-        innerCircle.Visible     = false
-        innerCircle.Radius      = Config.detectionSize - 10
-        innerCircle.Color       = Theme.gold
-        innerCircle.Thickness   = 1
-        innerCircle.Transparency= 0.5
-        innerCircle.Filled      = false
-        innerCircle.NumSides    = 64
+        innerCircle.Visible = false
+        innerCircle.Radius = Config.detectionSize - 10
+        innerCircle.Color = Theme.gold
+        innerCircle.Thickness = 1
+        innerCircle.Transparency = 0.5
+        innerCircle.Filled = false
+        innerCircle.NumSides = 64
     end
 end
 
@@ -153,25 +149,25 @@ end
 
 local function UpdateDetectionVisual()
     if Controller.safeMode then
-        detectionCircle.Visible = false
-        innerCircle.Visible = false
+        if detectionCircle then detectionCircle.Visible = false end
+        if innerCircle then innerCircle.Visible = false end
         return
     end
 
     EnsureCircles()
 
     local cursorPos = GetCursorPos()
-    detectionCircle.Visible  = true
+    detectionCircle.Visible = true
     detectionCircle.Position = cursorPos
-    detectionCircle.Radius   = Config.detectionSize
-    innerCircle.Position     = cursorPos
+    detectionCircle.Radius = Config.detectionSize
+    innerCircle.Position = cursorPos
 
     if Controller.cachedFocus then
         detectionCircle.Color = Theme.gold
-        innerCircle.Visible   = true
+        innerCircle.Visible = true
     else
         detectionCircle.Color = Theme.accent
-        innerCircle.Visible   = false
+        innerCircle.Visible = false
     end
 
     if Controller.active and Controller.currentFocus then
@@ -184,7 +180,9 @@ end
 
 --======== SISTEMA DE MIRA ========
 local function GetTargetPart(character)
-    if not character then return nil end
+    if not character then
+        return nil
+    end
 
     local head = character:FindFirstChild("Head")
     if head and head:IsA("BasePart") then
@@ -212,19 +210,26 @@ local function IsFriendly(player)
 end
 
 local function IsValidFocus(player)
-    if not player or player == LocalPlayer then return false end
+    if not player or player == LocalPlayer then
+        return false
+    end
 
     local char = player.Character
-    if not char then return false end
+    if not char then
+        return false
+    end
 
-    local hum  = char:FindFirstChildOfClass("Humanoid")
+    local hum = char:FindFirstChildOfClass("Humanoid")
     local part = GetTargetPart(char)
+    if not hum or not part then
+        return false
+    end
 
-    if not hum or not part then return false end
-    if hum.Health <= 0 then return false end
+    if hum.Health <= 0 then
+        return false
+    end
 
-    if hum.Health == math.huge or hum.MaxHealth == math.huge
-        or hum.Health > 1e6 or hum.MaxHealth > 1e6 then
+    if hum.Health == math.huge or hum.MaxHealth == math.huge or hum.Health > 1e6 or hum.MaxHealth > 1e6 then
         return false
     end
 
@@ -245,14 +250,25 @@ local function WorldToScreen(pos)
     return Vector2.new(v3.X, v3.Y), onScreen
 end
 
+-- cooldown para evitar spam de ScanForFocus
+local lastScan = 0
+local scanCooldown = 0.08  -- ~12.5x por segundo
+
 local function ScanForFocus()
-    if Controller.safeMode then return nil end
+    if Controller.safeMode then
+        return nil
+    end
+
+    local now = tick()
+    if now - lastScan < scanCooldown and Controller.cachedFocus and IsValidFocus(Controller.cachedFocus) then
+        return Controller.cachedFocus
+    end
+    lastScan = now
 
     local nearest = nil
     local nearestDist = math.huge
-
     local cursorPos = GetCursorPos()
-    local camPos    = Camera.CFrame.Position
+    local camPos = Camera.CFrame.Position
 
     for _, player in ipairs(Players:GetPlayers()) do
         if not IsFriendly(player) and IsValidFocus(player) then
@@ -266,7 +282,7 @@ local function ScanForFocus()
                         local screenDist = (screenPos - cursorPos).Magnitude
                         if screenDist <= Config.detectionSize and screenDist < nearestDist then
                             nearestDist = screenDist
-                            nearest     = player
+                            nearest = player
                         end
                     end
                 end
@@ -274,10 +290,10 @@ local function ScanForFocus()
         end
     end
 
+    Controller.cachedFocus = nearest
     return nearest
 end
 
--- HUMANIZAÇÃO: adiciona variação suave e offset aleatório
 local function TrackFocus()
     if Controller.safeMode or not Controller.active then
         return
@@ -291,17 +307,15 @@ local function TrackFocus()
             return
         end
 
-        -- Offset aleatório para parecer humano
         local randomOffset = Vector3.new(
             (math.random() - 0.5) * Config.aimOffset,
             (math.random() - 0.5) * Config.aimOffset,
             (math.random() - 0.5) * Config.aimOffset
         )
-        
+
         local targetPos = part.Position + randomOffset
         local targetCFrame = CFrame.new(Camera.CFrame.Position, targetPos)
 
-        -- Variação na suavidade
         local smoothVariation = Config.trackSmooth + (math.random() - 0.5) * Config.smoothJitter
         smoothVariation = math.clamp(smoothVariation, 0.05, 0.5)
 
@@ -338,7 +352,7 @@ local function GetOrCreatePathLine(player)
     line.Thickness = 1.5
     line.Transparency = 0.8
 
-    pathLines[player] = {__OBJ = line}
+    pathLines[player] = { __OBJ = line }
     return line
 end
 
@@ -357,7 +371,9 @@ local function ClearAllVisuals()
         local char = player.Character
         if char then
             local outline = char:FindFirstChild("mz_outline")
-            if outline then outline:Destroy() end
+            if outline then
+                outline:Destroy()
+            end
 
             for _, obj in ipairs(char:GetDescendants()) do
                 if obj:IsA("BillboardGui") and obj.Name == "mz_data" then
@@ -375,12 +391,15 @@ local function UpdatePlayerVisuals(player)
         local char = player.Character
         if char then
             local outline = char:FindFirstChild("mz_outline")
-            if outline then outline.Enabled = false end
-
+            if outline then
+                outline.Enabled = false
+            end
             local part = GetTargetPart(char)
             if part then
                 local billboard = part:FindFirstChild("mz_data")
-                if billboard then billboard.Enabled = false end
+                if billboard then
+                    billboard.Enabled = false
+                end
             end
         end
         return
@@ -395,7 +414,6 @@ local function UpdatePlayerVisuals(player)
     local part = GetTargetPart(char)
     local outline = char:FindFirstChild("mz_outline")
     local billboard
-
     if part then
         billboard = part:FindFirstChild("mz_data")
     end
@@ -411,10 +429,10 @@ local function UpdatePlayerVisuals(player)
     if VisualOpts.outline then
         outline = GetOrCreateOutline(char)
         if player == Controller.currentFocus then
-            outline.FillColor    = Theme.gold
+            outline.FillColor = Theme.gold
             outline.OutlineColor = Theme.gold
         else
-            outline.FillColor    = Theme.accent
+            outline.FillColor = Theme.accent
             outline.OutlineColor = Theme.accent
         end
         outline.Enabled = true
@@ -422,7 +440,7 @@ local function UpdatePlayerVisuals(player)
         outline.Enabled = false
     end
 
-    -- Billboard de informações
+    -- Billboard
     if part and VisualOpts.dataLayer then
         if not billboard then
             billboard = Instance.new("BillboardGui")
@@ -486,7 +504,6 @@ local function UpdatePlayerVisuals(player)
         if VisualOpts.healthVis and healthBG and healthBar and maxHp > 0 then
             local ratio = math.clamp(hp / maxHp, 0, 1)
             healthBar.Size = UDim2.new(ratio, 0, 1, 0)
-
             if ratio > 0.6 then
                 healthBar.BackgroundColor3 = Theme.success
             elseif ratio > 0.3 then
@@ -499,7 +516,7 @@ local function UpdatePlayerVisuals(player)
         billboard.Enabled = false
     end
 
-    -- Path lines (tracers)
+    -- Tracers (path lines)
     local lineObj = pathLines[player] and pathLines[player].__OBJ or nil
     if VisualOpts.pathLines and part then
         local line = lineObj or GetOrCreatePathLine(player)
@@ -519,24 +536,39 @@ local function UpdatePlayerVisuals(player)
     end
 end
 
+-- batching: atualiza só alguns jogadores por ciclo
+local espIndex = 1
+
 local function RefreshAllVisuals()
-    if Controller.safeMode then return end
-    ClearAllVisuals()
-    if Controller.visualsOn then
-        local maxPerCycle = PerfMode.enabled and 12 or math.huge
-        local count = 0
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer then
-                UpdatePlayerVisuals(player)
-                count = count + 1
-                if count >= maxPerCycle then break end
-            end
+    if Controller.safeMode or not Controller.visualsOn then
+        return
+    end
+
+    local players = Players:GetPlayers()
+    local total = #players
+    if total <= 1 then
+        return
+    end
+
+    local maxPerCycle = PerfMode.enabled and 4 or 8  -- menos jogadores por ciclo
+
+    for i = 1, maxPerCycle do
+        espIndex = espIndex + 1
+        if espIndex > total then
+            espIndex = 1
+        end
+
+        local player = players[espIndex]
+        if player and player ~= LocalPlayer then
+            UpdatePlayerVisuals(player)
         end
     end
 end
 
 local function ForceVisualRefresh()
-    if Controller.safeMode then return end
+    if Controller.safeMode then
+        return
+    end
     ClearAllVisuals()
     if Controller.visualsOn then
         for _, player in ipairs(Players:GetPlayers()) do
@@ -569,9 +601,7 @@ local function TogglePerformanceMode(enable)
     PerfMode.enabled = enable
 
     for _, obj in ipairs(Lighting:GetChildren()) do
-        if obj:IsA("BloomEffect")
-        or obj:IsA("DepthOfFieldEffect")
-        or obj:IsA("ColorCorrectionEffect") then
+        if obj:IsA("BloomEffect") or obj:IsA("DepthOfFieldEffect") or obj:IsA("ColorCorrectionEffect") then
             obj.Enabled = not enable
         end
     end
@@ -594,12 +624,12 @@ local function ActivateSafeMode()
     Controller.safeMode = not Controller.safeMode
 
     if Controller.safeMode then
-        SafeModeBackup.active    = Controller.active
+        SafeModeBackup.active = Controller.active
         SafeModeBackup.visualsOn = Controller.visualsOn
-        SafeModeBackup.perfOn    = PerfMode.enabled
+        SafeModeBackup.perfOn = PerfMode.enabled
         SafeModeBackup.uiVisible = Controller.uiVisible
 
-        Controller.active    = false
+        Controller.active = false
         Controller.visualsOn = false
         Controller.uiVisible = false
 
@@ -608,8 +638,9 @@ local function ActivateSafeMode()
         end
 
         ClearAllVisuals()
-        detectionCircle.Visible = false
-        innerCircle.Visible = false
+
+        if detectionCircle then detectionCircle.Visible = false end
+        if innerCircle then innerCircle.Visible = false end
 
         if UIRoot then
             UIRoot.Enabled = false
@@ -617,7 +648,7 @@ local function ActivateSafeMode()
 
         Notify("Modo Seguro ATIVO", 2)
     else
-        Controller.active    = false
+        Controller.active = false
         Controller.visualsOn = SafeModeBackup.visualsOn
 
         if SafeModeBackup.perfOn then
@@ -626,8 +657,8 @@ local function ActivateSafeMode()
 
         Controller.uiVisible = SafeModeBackup.uiVisible
 
-        detectionCircle.Visible = true
-        innerCircle.Visible = false
+        if detectionCircle then detectionCircle.Visible = true end
+        if innerCircle then innerCircle.Visible = false end
 
         if UIRoot then
             UIRoot.Enabled = Controller.uiVisible
@@ -647,15 +678,17 @@ local sessionStart = tick()
 local KeybindCapture = {
     active = false,
     target = nil,
-    label  = nil,
+    label = nil,
 }
 
 local function StartKeyCapture(targetName, labelRef)
-    if KeybindCapture.active then return end
+    if KeybindCapture.active then
+        return
+    end
 
     KeybindCapture.active = true
     KeybindCapture.target = targetName
-    KeybindCapture.label  = labelRef
+    KeybindCapture.label = labelRef
 
     if labelRef then
         labelRef.Text = "Aguardando tecla..."
@@ -668,7 +701,7 @@ local function FinishKeyCapture(keyCode)
     if not KeybindCapture.active or not keyCode then
         KeybindCapture.active = false
         KeybindCapture.target = nil
-        KeybindCapture.label  = nil
+        KeybindCapture.label = nil
         return
     end
 
@@ -694,10 +727,40 @@ local function FinishKeyCapture(keyCode)
 
     KeybindCapture.active = false
     KeybindCapture.target = nil
-    KeybindCapture.label  = nil
+    KeybindCapture.label = nil
+end
+
+-- slider system: um único InputChanged global
+local activeSlider = nil
+
+local function AttachGlobalSliderListener()
+    if AttachGlobalSliderListener._connected then
+        return
+    end
+
+    UserInputService.InputChanged:Connect(function(input)
+        if activeSlider and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local trackBg = activeSlider.trackBg
+            local minVal = activeSlider.min
+            local maxVal = activeSlider.max
+            local onchange = activeSlider.callback
+            local valueLabel = activeSlider.valueLabel
+            local trackFill = activeSlider.trackFill
+
+            local ratio = math.clamp((input.Position.X - trackBg.AbsolutePosition.X) / trackBg.AbsoluteSize.X, 0, 1)
+            local value = math.floor(minVal + (maxVal - minVal) * ratio)
+            trackFill.Size = UDim2.new(ratio, 0, 1, 0)
+            valueLabel.Text = tostring(value)
+            onchange(value)
+        end
+    end)
+
+    AttachGlobalSliderListener._connected = true
 end
 
 local function CreateConfigSlider(parent, title, desc, yOffset, minVal, maxVal, defaultVal, onchange)
+    AttachGlobalSliderListener()
+
     local container = Instance.new("Frame")
     container.Size = UDim2.new(1, -40, 0, 70)
     container.Position = UDim2.new(0, 20, 0, yOffset)
@@ -759,9 +822,16 @@ local function CreateConfigSlider(parent, title, desc, yOffset, minVal, maxVal, 
     fillCorner.CornerRadius = UDim.new(0, 2)
     fillCorner.Parent = trackFill
 
-    local dragging = false
+    local sliderData = {
+        trackBg = trackBg,
+        trackFill = trackFill,
+        valueLabel = valueLabel,
+        min = minVal,
+        max = maxVal,
+        callback = onchange
+    }
 
-    local function updateValue(input)
+    local function updateFromInput(input)
         local ratio = math.clamp((input.Position.X - trackBg.AbsolutePosition.X) / trackBg.AbsoluteSize.X, 0, 1)
         local value = math.floor(minVal + (maxVal - minVal) * ratio)
         trackFill.Size = UDim2.new(ratio, 0, 1, 0)
@@ -771,20 +841,16 @@ local function CreateConfigSlider(parent, title, desc, yOffset, minVal, maxVal, 
 
     trackBg.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            updateValue(input)
+            activeSlider = sliderData
+            updateFromInput(input)
         end
     end)
 
     trackBg.InputEnded:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = false
-        end
-    end)
-
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-            updateValue(input)
+            if activeSlider == sliderData then
+                activeSlider = nil
+            end
         end
     end)
 end
@@ -831,7 +897,10 @@ local function CreateVisualToggle(parent, yOffset, labelText, optionKey)
     indCorner.Parent = indicator
 
     btn.MouseButton1Click:Connect(function()
-        if Controller.safeMode then return end
+        if Controller.safeMode then
+            return
+        end
+
         VisualOpts[optionKey] = not VisualOpts[optionKey]
         indicator.BackgroundColor3 = VisualOpts[optionKey] and Theme.gold or Theme.slate
         ForceVisualRefresh()
@@ -938,7 +1007,10 @@ local function SwitchToTab(tabName)
         espCorner.Parent = espMainBtn
 
         espMainBtn.MouseButton1Click:Connect(function()
-            if Controller.safeMode then return end
+            if Controller.safeMode then
+                return
+            end
+
             Controller.visualsOn = not Controller.visualsOn
             espMainBtn.BackgroundColor3 = Controller.visualsOn and Theme.gold or Theme.slate
             espMainBtn.TextColor3 = Controller.visualsOn and Theme.navy or Theme.cream
@@ -989,7 +1061,9 @@ local function SwitchToTab(tabName)
         perfCorner.Parent = perfBtn
 
         perfBtn.MouseButton1Click:Connect(function()
-            if Controller.safeMode then return end
+            if Controller.safeMode then
+                return
+            end
             TogglePerformanceMode(not PerfMode.enabled)
             perfBtn.BackgroundColor3 = PerfMode.enabled and Theme.success or Theme.danger
             perfBtn.Text = PerfMode.enabled and "0 LAG: ATIVO" or "0 LAG: DESATIVADO"
@@ -1041,7 +1115,9 @@ local function SwitchToTab(tabName)
             keyCorner.Parent = keyBtn
 
             keyBtn.MouseButton1Click:Connect(function()
-                if Controller.safeMode then return end
+                if Controller.safeMode then
+                    return
+                end
                 StartKeyCapture(targetName, keyBtn)
             end)
         end
@@ -1195,39 +1271,37 @@ local function BuildInterface()
     badgeCorner.CornerRadius = UDim.new(0, 10)
     badgeCorner.Parent = badge
 
-    -- Drag funcional CORRIGIDO
-    do
-        local dragging = false
-        local dragStart
-        local startPos
+    -- drag
+    local dragging = false
+    local dragStart
+    local startPos
 
-        topBar.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 then
-                dragging = true
-                dragStart = UserInputService:GetMouseLocation()
-                startPos = MainContainer.Position
-            end
-        end)
+    topBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = UserInputService:GetMouseLocation()
+            startPos = MainContainer.Position
+        end
+    end)
 
-        topBar.InputEnded:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 then
-                dragging = false
-            end
-        end)
+    topBar.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
 
-        UserInputService.InputChanged:Connect(function(input)
-            if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-                local currentPos = UserInputService:GetMouseLocation()
-                local delta = currentPos - dragStart
-                MainContainer.Position = UDim2.new(
-                    startPos.X.Scale,
-                    startPos.X.Offset + delta.X,
-                    startPos.Y.Scale,
-                    startPos.Y.Offset + delta.Y
-                )
-            end
-        end)
-    end
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local currentPos = UserInputService:GetMouseLocation()
+            local delta = currentPos - dragStart
+            MainContainer.Position = UDim2.new(
+                startPos.X.Scale,
+                startPos.X.Offset + delta.X,
+                startPos.Y.Scale,
+                startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
 
     local navBar = Instance.new("Frame")
     navBar.Size = UDim2.new(0, 130, 1, -46)
@@ -1275,7 +1349,9 @@ local function BuildInterface()
         TabRegistry[tabID] = btn
 
         btn.MouseButton1Click:Connect(function()
-            if Controller.safeMode and tabID ~= "config" then return end
+            if Controller.safeMode and tabID ~= "config" then
+                return
+            end
             SwitchToTab(tabID)
         end)
     end
@@ -1304,7 +1380,7 @@ end
 
 BuildInterface()
 
--- WATCHDOG: recria UI se for destruída
+-- WATCHDOG: só recria se ScreenGui sumir mesmo
 local function WatchdogCheck()
     if not UIRoot or not UIRoot.Parent then
         BuildInterface()
@@ -1313,7 +1389,9 @@ local function WatchdogCheck()
 end
 
 local function ToggleInterface()
-    if Controller.safeMode then return end
+    if Controller.safeMode then
+        return
+    end
     Controller.uiVisible = not Controller.uiVisible
     if UIRoot then
         UIRoot.Enabled = Controller.uiVisible
@@ -1326,15 +1404,15 @@ local lastVisualUpdate = 0
 local lastWatchdog = 0
 
 RunService.Heartbeat:Connect(function()
-    -- Watchdog leve (verifica a cada 2s)
     if tick() - lastWatchdog > 2 then
         WatchdogCheck()
         lastWatchdog = tick()
     end
 
-    if Controller.safeMode then return end
+    if Controller.safeMode then
+        return
+    end
 
-    -- Atualiza status no combat tab
     if Controller.uiVisible and Controller.activeTab == "combat" then
         local statusDisplay = TabContent:FindFirstChild("StatusDisplay", true)
         if statusDisplay then
@@ -1345,7 +1423,6 @@ RunService.Heartbeat:Connect(function()
         end
     end
 
-    -- Atualiza info na session tab
     if Controller.uiVisible and Controller.activeTab == "info" then
         local sessionData = TabContent:FindFirstChild("SessionData", true)
         if sessionData then
@@ -1357,7 +1434,9 @@ RunService.Heartbeat:Connect(function()
 end)
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
+    if gameProcessed then
+        return
+    end
 
     if KeybindCapture.active and input.UserInputType == Enum.UserInputType.Keyboard then
         FinishKeyCapture(input.KeyCode)
@@ -1369,11 +1448,12 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
         return
     end
 
-    if Controller.safeMode then return end
+    if Controller.safeMode then
+        return
+    end
 
     if input.KeyCode == AimKey then
         Controller.active = not Controller.active
-
         if Controller.active then
             Controller.currentFocus = ScanForFocus()
             if Controller.currentFocus then
@@ -1402,7 +1482,9 @@ end)
 RunService.RenderStepped:Connect(function()
     UpdateDetectionVisual()
 
-    if Controller.safeMode then return end
+    if Controller.safeMode then
+        return
+    end
 
     if Controller.active then
         TrackFocus()
@@ -1411,8 +1493,13 @@ RunService.RenderStepped:Connect(function()
         end
     end
 
-    if tick() - lastFocusCheck > 0.05 then
-        Controller.cachedFocus = Controller.visualsOn and ScanForFocus() or nil
+    -- cache de alvo baseado em FOV, respeitando cooldown de ScanForFocus
+    if tick() - lastFocusCheck > 0.1 then
+        if Controller.visualsOn then
+            Controller.cachedFocus = ScanForFocus()
+        else
+            Controller.cachedFocus = nil
+        end
         lastFocusCheck = tick()
     end
 
